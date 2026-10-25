@@ -1,0 +1,47 @@
+# External authenticated TLS replica set, ingress, SMTP and private S3 are provisioned separately.
+services:
+  api:
+    image: ${API_IMAGE:-sunvika-office-api:0.9.0}
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DOCS_ENABLED: "false"
+      RATE_LIMIT_STORE: mongo
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      SHUTDOWN_TIMEOUT_MS: 10000
+      MONGODB_URI: ${MONGODB_URI:?Authenticated TLS replica set required}
+      MONGODB_MAX_POOL_SIZE: ${MONGODB_MAX_POOL_SIZE:-20}
+      MONGODB_WAIT_QUEUE_TIMEOUT_MS: ${MONGODB_WAIT_QUEUE_TIMEOUT_MS:-2000}
+      SLOW_QUERY_MS: ${SLOW_QUERY_MS:-1000}
+      CORS_ORIGINS: ${CORS_ORIGINS:?HTTPS UI origin required}
+      CREDENTIAL_UI_ORIGIN: ${CREDENTIAL_UI_ORIGIN:?HTTPS credential UI origin required}
+      CREDENTIAL_DELIVERY_ENABLED: ${CREDENTIAL_DELIVERY_ENABLED:-true}
+      CREDENTIAL_DELIVERY_INTERVAL_MS: ${CREDENTIAL_DELIVERY_INTERVAL_MS:-5000}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      JWT_SECRET: ${JWT_SECRET:?Signing secret required}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Encryption key required}
+      AWS_REGION: ${AWS_REGION:?Private storage region required}
+      S3_BUCKET: ${S3_BUCKET:?Private storage bucket required}
+    ports: ["127.0.0.1:3000:3000"]
+    stop_grace_period: 20s
+    restart: unless-stopped
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }

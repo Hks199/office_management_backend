@@ -1,0 +1,21 @@
+[
+  {
+    "AllowedOrigins": [
+      "http://localhost:5173"
+    ],
+    "AllowedMethods": [
+      "POST",
+      "GET",
+      "HEAD"
+    ],
+    "AllowedHeaders": [
+      "*"
+    ],
+    "ExposeHeaders": [
+      "ETag",
+      "x-amz-version-id",
+      "x-amz-checksum-sha256"
+    ],
+    "MaxAgeSeconds": 300
+  }
+]

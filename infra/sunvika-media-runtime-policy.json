@@ -1,0 +1,28 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InspectPrivateBucketConfiguration",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetBucketCORS"
+      ],
+      "Resource": "arn:aws:s3:::sunvika-media"
+    },
+    {
+      "Sid": "ReadAndWriteApplicationFiles",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:GetObjectVersion"],
+      "Resource": [
+        "arn:aws:s3:::sunvika-media/sunvika/attendance/*",
+        "arn:aws:s3:::sunvika-media/sunvika/site-visits/*",
+        "arn:aws:s3:::sunvika-media/sunvika/imports/*",
+        "arn:aws:s3:::sunvika-media/sunvika/exports/*"
+      ]
+    }
+  ]
+}

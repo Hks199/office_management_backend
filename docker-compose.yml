@@ -1,0 +1,59 @@
+# Local development only. Production requires authenticated, TLS-protected MongoDB.
+services:
+  api:
+    build: .
+    init: true
+    environment:
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: 3000
+      MONGODB_URI: mongodb://mongo:27017/sunvika?replicaSet=rs0
+      CORS_ORIGINS: http://localhost:5173
+      DOCS_ENABLED: "true"
+      JWT_SECRET: ${JWT_SECRET:-}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+      CREDENTIAL_UI_ORIGIN: http://localhost:5173
+      CREDENTIAL_DELIVERY_ENABLED: ${CREDENTIAL_DELIVERY_ENABLED:-true}
+      CREDENTIAL_DELIVERY_INTERVAL_MS: ${CREDENTIAL_DELIVERY_INTERVAL_MS:-5000}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    stop_grace_period: 15s
+    restart: unless-stopped
+  mongo:
+    image: mongo:8.0
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { if (rs.status().myState !== 1) quit(1); } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]}); quit(1); }"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+  redis:
+    image: redis:7.4-alpine
+    profiles: ["cache"]
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+volumes:
+  mongo-data:
+  redis-data:

@@ -1,0 +1,31 @@
+# Isolated CI only. No host MongoDB port, credentials or persistent deployment volumes.
+services:
+  mongo:
+    image: mongo:8.0
+    command: [mongod, --replSet, rs0, --bind_ip_all]
+    healthcheck:
+      test: [CMD, mongosh, --quiet, --eval, "try { if (rs.status().myState !== 1) quit(1); } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]}); quit(1); }"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+  api:
+    build: .
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3100
+      MONGODB_URI: mongodb://mongo:27017/ci?replicaSet=rs0
+      RATE_LIMIT_STORE: mongo
+      DOCS_ENABLED: "false"
+      JWT_SECRET: ${JWT_SECRET:?Ephemeral test secret required}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Ephemeral test key required}
+      CORS_ORIGINS: https://app.example.invalid
+      CREDENTIAL_UI_ORIGIN: https://app.example.invalid
+    depends_on:
+      mongo: { condition: service_healthy }
+    stop_grace_period: 20s

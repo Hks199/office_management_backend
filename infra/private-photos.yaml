@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Sunvika private attendance/visit/import/export bucket and separate runtime/cleanup IAM policies
+Parameters:
+  FrontendOrigin:
+    Type: String
+    AllowedPattern: 'https://[^/]+'
+Resources:
+  Photos:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: [!Ref FrontendOrigin]
+            AllowedMethods: [POST, GET, HEAD]
+            AllowedHeaders: ['*']
+            MaxAge: 300
+  SecureTransport:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Photos
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt Photos.Arn, !Sub '${Photos.Arn}/*']
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+  RuntimePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: [s3:GetBucketVersioning, s3:GetBucketPublicAccessBlock, s3:GetEncryptionConfiguration]
+            Resource: !GetAtt Photos.Arn
+          - Effect: Allow
+            Action: [s3:PutObject, s3:GetObject, s3:GetObjectVersion]
+            Resource: [!Sub '${Photos.Arn}/sunvika/attendance/*', !Sub '${Photos.Arn}/sunvika/site-visits/*', !Sub '${Photos.Arn}/sunvika/imports/*', !Sub '${Photos.Arn}/sunvika/exports/*']
+  CleanupPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: [s3:GetBucketVersioning, s3:GetBucketPublicAccessBlock, s3:GetEncryptionConfiguration]
+            Resource: !GetAtt Photos.Arn
+          - Effect: Allow
+            Action: s3:ListBucketVersions
+            Resource: !GetAtt Photos.Arn
+            Condition:
+              StringLike:
+                s3:prefix: ['sunvika/attendance/*', 'sunvika/site-visits/*', 'sunvika/imports/*', 'sunvika/exports/*']
+          - Effect: Allow
+            Action: s3:DeleteObjectVersion
+            Resource: [!Sub '${Photos.Arn}/sunvika/attendance/*', !Sub '${Photos.Arn}/sunvika/site-visits/*', !Sub '${Photos.Arn}/sunvika/imports/*', !Sub '${Photos.Arn}/sunvika/exports/*']
+Outputs:
+  BucketName:
+    Value: !Ref Photos
+  RuntimePolicyArn:
+    Value: !Ref RuntimePolicy
+  CleanupPolicyArn:
+    Value: !Ref CleanupPolicy
