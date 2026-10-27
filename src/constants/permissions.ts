@@ -3,6 +3,7 @@ export type DataScope = typeof DATA_SCOPES[number];
 
 export const PERMISSION_CODES = [
   'users:create', 'users:read', 'users:update', 'users:deactivate', 'users:change_manager', 'users:transfer',
+  'users:open_panel',
   'hierarchy:read', 'roles:create', 'roles:read', 'roles:update', 'roles:delete', 'roles:assign',
   'permissions:read', 'permissions:assign', 'permissions:delegate_sensitive', 'policies:manage',
   'branches:create', 'branches:read', 'branches:update', 'branches:assign_head',
@@ -22,7 +23,7 @@ export const isAdministrator = (grants: Grant[]) => ADMINISTRATOR_PERMISSIONS.ev
 
 export function permissionDefinition(code: PermissionCode) {
   const sensitive = /^(roles:|permissions:|policies:|settings:)/.test(code);
-  const allowedScopes: readonly DataScope[] = code === 'leads:route' ? ['SELF', 'ALL'] : sensitive || code === 'activity_logs:read' ||
+  const allowedScopes: readonly DataScope[] = code === 'users:open_panel' ? ['DIRECT_REPORTS', 'REPORTING_SUBTREE', 'ALL'] : code === 'leads:route' ? ['SELF', 'ALL'] : sensitive || code === 'activity_logs:read' ||
     ['locations:manage', 'branches:create', 'branches:assign_head'].includes(code) ? ['ALL'] :
     ['attendance:create', 'reports:create', 'notifications:read', 'notifications:update', 'customers:receive_assignment', 'leads:receive_assignment'].includes(code) ? ['SELF'] :
     code.startsWith('leads:') || code.startsWith('customers:') ? DATA_SCOPES :

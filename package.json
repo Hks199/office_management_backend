@@ -36,6 +36,7 @@
     "jobs:commercial": "tsx src/scripts/process-commercial-jobs.ts",
     "enable:commercial-capabilities": "tsx src/scripts/enable-commercial-capabilities.ts",
     "enable:lead-routing": "tsx src/scripts/enable-lead-routing.ts",
+    "enable:employee-panels": "tsx src/scripts/enable-employee-panels.ts",
     "db:indexes:reports": "tsx src/scripts/report-indexes.ts",
     "db:indexes:targets": "tsx src/scripts/target-indexes.ts",
     "db:indexes:dashboards": "tsx src/scripts/dashboard-indexes.ts",

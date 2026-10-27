@@ -1,5 +1,6 @@
 import type { OpenAPIV3 } from 'openapi-types';
 import { identityPaths, identitySchemas } from '../modules/auth/auth.openapi.js';
+import { employeePanelPaths } from '../modules/auth/employee-panel.openapi.js';
 import { organizationPaths, organizationSchemas } from '../modules/hierarchy/organization.openapi.js';
 import { attendancePaths, attendanceSchemas } from '../modules/attendance/attendance.openapi.js';
 import { commercialPaths, commercialSchemas } from '../modules/leads/commercial.openapi.js';
@@ -61,6 +62,7 @@ export const openApiDocument: OpenAPIV3.Document = {
       },
     } },
     ...identityPaths,
+    ...employeePanelPaths,
     ...organizationPaths,
     ...attendancePaths,
     ...commercialPaths,

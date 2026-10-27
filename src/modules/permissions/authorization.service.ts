@@ -7,6 +7,7 @@ import { BranchModel } from '../branches/branch.model.js';
 import { isPermissionCode, permissionDefinition, type Grant, type PermissionCode } from '../../constants/permissions.js';
 import type { Principal } from '../auth/auth.types.js';
 import { AppError } from '../../shared/errors/app-error.js';
+import { blockedPanelPermission } from '../auth/employee-panel-context.js';
 
 export class AuthorizationService {
   constructor(private readonly repository = new PermissionRepository()) {}
@@ -26,9 +27,11 @@ export class AuthorizationService {
   }
 
   require(principal: Principal, action: PermissionCode): void {
+    if (principal.employeePanel && blockedPanelPermission(action)) throw new AppError(403, 'EMPLOYEE_PANEL_RESTRICTED', 'This action requires the account owner');
     if (!principal.grants.some((grant) => grant.permission === action)) throw new AppError(403, 'FORBIDDEN', 'Access denied');
   }
   requireAll(principal: Principal, action: PermissionCode): void {
+    if (principal.employeePanel && blockedPanelPermission(action)) throw new AppError(403, 'EMPLOYEE_PANEL_RESTRICTED', 'This action requires the account owner');
     if (!principal.grants.some((grant) => grant.permission === action && grant.scope === 'ALL')) {
       throw new AppError(403, 'FORBIDDEN', 'Access denied');
     }

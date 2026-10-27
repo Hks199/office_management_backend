@@ -23,6 +23,9 @@ import { decryptSecret } from '../../src/shared/utils/crypto.js';
 import { UserService } from '../../src/modules/users/user.service.js';
 import type { EmployeeCreate } from '../../src/modules/users/user.types.js';
 import { CustomerModel } from '../../src/modules/leads/commercial.models.js';
+import { EmployeePanelModel } from '../../src/modules/auth/employee-panel.model.js';
+import { PermissionModel } from '../../src/modules/permissions/permission.model.js';
+import { EmployeePanelService } from '../../src/modules/auth/employee-panel.service.js';
 
 const config = testConfig({ rateLimitMax: 10000 }); const app = testApp({ rateLimitMax: 10000 });
 const password = 'Organization test password 2026!'; const authService = new AuthService(config);
@@ -88,6 +91,86 @@ beforeAll(async () => {
 }, 180000);
 beforeEach(async () => { await LoginAttemptModel.deleteMany({}); });
 afterAll(async () => { await disconnectDatabase(); await replica?.stop(); });
+
+describe('delegated employee panels', () => {
+  const start = async (employeeId: string, token = rootToken) => data<{ panelToken: string; expiresAt: string }>(await request(app)
+    .post('/api/v1/auth/employee-panels/start').set('Authorization', bearer(token)).send({ employeeId }).expect(200));
+
+  it('opens a downline panel, performs normal work with the real manager audited, and returns without replacing login cookies', async () => {
+    const response = await request(app).post('/api/v1/auth/employee-panels/start').set('Authorization', bearer())
+      .send({ employeeId: head._id }).expect(200);
+    const panel = data<{ panelToken: string; expiresAt: string }>(response);
+    expect(response.headers['set-cookie']).toBeUndefined();
+    expect(panel).not.toHaveProperty('accessToken');
+    expect(new Date(panel.expiresAt).getTime()).toBeLessThanOrEqual(Date.now() + 30 * 60000);
+    const me = data<{ id: string; employeePanel: { managerName: string }; grants: { permission: string }[] }>(await request(app)
+      .get('/api/v1/auth/me').set('Authorization', bearer()).set('X-Employee-Panel', panel.panelToken).expect(200));
+    expect(me.id).toBe(head._id); expect(me.employeePanel.managerName).toBe('Test Director');
+    expect(me.grants.some((grant) => ['attendance:create', 'users:open_panel'].includes(grant.permission))).toBe(false);
+    const current = await UserModel.findById(sex._id).orFail().lean();
+    await request(app).patch(`/api/v1/employees/${sex._id}`).set('Authorization', bearer()).set('X-Employee-Panel', panel.panelToken)
+      .send({ revision: current.revision, designation: 'Delegated profile update' }).expect(200);
+    const log = await ActivityLogModel.findOne({ action: 'EMPLOYEE_UPDATED', entityId: sex._id }).sort({ createdAt: -1 }).orFail().lean();
+    expect(log.actorId?.toHexString()).toBe(rootId);
+    expect(log.metadata.actingAsEmployeeId).toBe(head._id);
+    await UserModel.updateOne({ _id: sex._id }, { $set: { revision: current.revision }, $unset: { designation: '' } });
+    await request(app).post('/api/v1/auth/employee-panels/stop').set('Authorization', bearer()).set('X-Employee-Panel', panel.panelToken).expect(200);
+    await request(app).get('/api/v1/auth/me').set('Authorization', bearer()).set('X-Employee-Panel', panel.panelToken).expect(403);
+    expect(data<{ id: string }>(await request(app).get('/api/v1/auth/me').set('Authorization', bearer()).expect(200)).id).toBe(rootId);
+  }, 30000);
+
+  it('blocks peers, ancestors, self, ordinary staff, nested panels, attendance and account-security changes', async () => {
+    for (const employeeId of [rootId, head._id, peer._id, headB._id]) {
+      await request(app).post('/api/v1/auth/employee-panels/start').set('Authorization', bearer(headToken)).send({ employeeId }).expect(403);
+    }
+    await request(app).post('/api/v1/auth/employee-panels/start').set('Authorization', bearer(sexToken)).send({ employeeId: tc._id }).expect(403);
+    const panel = await start(sex._id, headToken);
+    for (const path of ['/auth/change-password', '/auth/logout-all', '/attendance/check-in', '/attendance/check-out', '/files/upload-intents']) {
+      await request(app).post(`/api/v1${path}`).set('Authorization', bearer(headToken)).set('X-Employee-Panel', panel.panelToken).send({}).expect(403);
+    }
+    await request(app).post('/api/v1/auth/employee-panels/start').set('Authorization', bearer(headToken))
+      .set('X-Employee-Panel', panel.panelToken).send({ employeeId: tc._id }).expect(403);
+    await request(app).get(`/api/v1/employees/${rootId}`).set('Authorization', bearer(headToken)).set('X-Employee-Panel', panel.panelToken).expect(404);
+  }, 30000);
+
+  it('binds panel tokens to the manager and original login family, expires them and rejects tampering', async () => {
+    const panel = await start(tc._id);
+    await request(app).get('/api/v1/auth/me').set('Authorization', bearer(headToken)).set('X-Employee-Panel', panel.panelToken).expect(403);
+    const otherLogin = await authService.login('org-md@example.invalid', password, { requestId: 'panel-new-family' });
+    await request(app).get('/api/v1/auth/me').set('Authorization', bearer(otherLogin.accessToken)).set('X-Employee-Panel', panel.panelToken).expect(403);
+    await request(app).get('/api/v1/auth/me').set('Authorization', bearer()).set('X-Employee-Panel', 'invalid').expect(403);
+    await EmployeePanelModel.updateOne({ employeeId: tc._id, managerId: rootId, revokedAt: null }, { $set: { expiresAt: new Date(0) } });
+    await request(app).get('/api/v1/auth/me').set('Authorization', bearer()).set('X-Employee-Panel', panel.panelToken).expect(403);
+  }, 30000);
+
+  it('revokes delegated access when a manager loses permission, and rechecks it inside business transactions', async () => {
+    const panel = await start(head._id);
+    const principal = await new EmployeePanelService().resolve(await authService.authenticate(rootToken), panel.panelToken);
+    const role = await RoleModel.findById(roles.get('MD')).orFail().lean();
+    const permission = await PermissionModel.findOne({ code: 'users:open_panel' }).orFail().lean();
+    try {
+      await RoleModel.updateOne({ _id: role._id }, { $set: { permissions: role.permissions.filter((grant) => !grant.permissionId.equals(permission._id)) } });
+      await request(app).get('/api/v1/auth/me').set('Authorization', bearer()).set('X-Employee-Panel', panel.panelToken).expect(403);
+      const employee = await UserModel.findById(sex._id).orFail().lean();
+      await expect(new UserService(config).update(principal, new Types.ObjectId(sex._id), {
+        revision: employee.revision, designation: 'Must not be written',
+      }, { requestId: 'stale-panel-principal' })).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+      expect((await UserModel.findById(sex._id).orFail().lean()).revision).toBe(employee.revision);
+    } finally { await RoleModel.updateOne({ _id: role._id }, { $set: { permissions: role.permissions } }); }
+  }, 30000);
+
+  it('revokes panels when the reporting path disappears and when the original manager signs out', async () => {
+    const manager = await createEmployee('BH', rootId, branchA._id); const managerToken = await signIn(manager);
+    const employee = await createEmployee('SEX', manager._id, branchA._id);
+    const panel = await start(employee._id, managerToken);
+    await UserModel.updateOne({ _id: employee._id }, { $set: { reportingManagerId: rootId } });
+    await request(app).get('/api/v1/auth/me').set('Authorization', bearer(managerToken)).set('X-Employee-Panel', panel.panelToken).expect(403);
+    await UserModel.updateOne({ _id: employee._id }, { $set: { reportingManagerId: manager._id } });
+    const fresh = await start(employee._id, managerToken);
+    await authService.logoutAll(await authService.authenticate(managerToken), { requestId: 'manager-signout' });
+    await request(app).get('/api/v1/auth/me').set('Authorization', bearer(managerToken)).set('X-Employee-Panel', fresh.panelToken).expect(401);
+  }, 30000);
+});
 
 describe('employee creation policies and invitations', () => {
   it('shares a whole reporting subtree with all selected managers and revokes removed managers immediately', async () => {

@@ -8,6 +8,7 @@ const sessionSchema = new Schema({
   consumedAt: { type: Date, default: null }, revokedAt: { type: Date, default: null },
   csrfHash: { type: String, required: true, select: false },
   authVersion: { type: Number, required: true },
+  employeePanelId: { type: Schema.Types.ObjectId, default: null },
 }, { timestamps: true, strict: 'throw', collection: 'refresh_sessions' });
 sessionSchema.index({ userId: 1, revokedAt: 1 });
 sessionSchema.index({ familyId: 1, revokedAt: 1 });

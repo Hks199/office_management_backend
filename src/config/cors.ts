@@ -11,7 +11,7 @@ export function corsOptions(config: AppConfig): CorsOptions {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-CSRF-Token', 'Idempotency-Key'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-CSRF-Token', 'Idempotency-Key', 'X-Employee-Panel'],
     exposedHeaders: ['X-Request-Id', 'RateLimit', 'RateLimit-Policy'],
     maxAge: 600,
   };

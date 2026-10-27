@@ -21,6 +21,7 @@ export function defaultGrants(role: SystemRole): Grant[] {
   add(['locations:read'], ['ALL']); add(['branches:read'], [role === 'BDO' || role === 'MH' ? 'REPORTING_SUBTREE' : 'BRANCH']);
   if (role === 'BDO' || role === 'MH' || role === 'BH') {
     const scope = role === 'BH' ? 'BRANCH' : 'REPORTING_SUBTREE';
+    add(['users:open_panel'], ['REPORTING_SUBTREE']);
     add(['users:read', 'hierarchy:read', 'users:create', 'users:update', 'users:deactivate', 'users:change_manager', 'users:transfer',
       'attendance:read', 'attendance:review', 'attendance:correct', 'customers:read', 'customers:assign', 'leads:create', 'leads:read',
       'leads:update', 'leads:assign', 'leads:propose_assignment', 'reports:read', 'reports:review',

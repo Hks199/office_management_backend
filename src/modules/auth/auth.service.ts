@@ -126,7 +126,9 @@ export class AuthService {
     if (!user) throw denied();
     return { id: user._id, employeeCode: user.employeeCode, firstName: user.firstName, lastName: user.lastName,
       email: user.email, mobileNumber: user.mobileNumber, roleId: user.roleId, branchId: user.branchId,
-      reportingManagerId: user.reportingManagerId, grants: principal.grants };
+      reportingManagerId: user.reportingManagerId, grants: principal.grants,
+      ...(principal.employeePanel ? { employeePanel: { managerName: principal.employeePanel.managerName,
+        expiresAt: principal.employeePanel.expiresAt } } : {}) };
   }
 
   async logoutAll(principal: Principal, context: AuditContext): Promise<void> {

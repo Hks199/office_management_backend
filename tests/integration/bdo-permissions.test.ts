@@ -8,6 +8,7 @@ import { bootstrapMd } from '../../src/modules/auth/bootstrap.service.js';
 import { defaultGrants } from '../../src/modules/permissions/seed.service.js';
 import { alignBdoPermissions } from '../../src/modules/permissions/align-bdo-permissions.js';
 import { repairMdCreationPolicies } from '../../src/modules/permissions/repair-md-creation-policies.js';
+import { enableEmployeePanels } from '../../src/modules/permissions/enable-employee-panels.js';
 import { AuthorizationService } from '../../src/modules/permissions/authorization.service.js';
 import { RoleModel } from '../../src/modules/roles/role.model.js';
 import { RolePolicyModel } from '../../src/modules/roles/role-policy.model.js';
@@ -79,8 +80,25 @@ it('repairs stale MD policies without enabling disabled policies or changing the
   expect((await repairMdCreationPolicies(true)).policiesUpdated).toBe(0);
 });
 
+it('enables manager panels once while preserving valid policies and leaving stale or disabled policies unchanged', async () => {
+  const permission = await PermissionModel.findOne({ code: 'users:open_panel' }).orFail().lean();
+  const roles = await RoleModel.find({ isSystemRole: true }).lean();
+  for (const role of roles) await RoleModel.updateOne({ _id: role._id }, { $set: {
+    permissions: role.permissions.filter((grant) => !grant.permissionId.equals(permission._id)),
+  } });
+  const md = roles.find((role) => role.code === 'MD'); const mh = roles.find((role) => role.code === 'MH');
+  if (!md || !mh) throw new Error('Required fixture roles missing');
+  const stale = await RolePolicyModel.findOne({ creatorRoleId: md._id, targetRoleId: mh._id }).orFail().lean();
+  await RolePolicyModel.updateOne({ _id: stale._id }, { $set: { creatorRoleRevision: 99 } });
+  const result = await enableEmployeePanels(); expect(result.rolesUpdated).toBe(4);
+  expect((await RolePolicyModel.findById(stale._id).orFail().lean()).creatorRoleRevision).toBe(99);
+  expect(await RolePolicyModel.countDocuments({ isActive: false })).toBe(1);
+  expect(await enableEmployeePanels()).toEqual({ rolesUpdated: 0, policiesUpdated: 0 });
+});
+
 it('rejects updates without an initialized active administrator', async () => {
   await UserModel.updateOne({ bootstrapKey: 'INITIAL_MD' }, { $set: { isActive: false } });
   await expect(alignBdoPermissions(true)).rejects.toThrow('active initialized bootstrap administrator');
   await expect(repairMdCreationPolicies(true)).rejects.toThrow('active initialized MD administrator');
+  await expect(enableEmployeePanels()).rejects.toThrow('Active initialized MD administrator required');
 });

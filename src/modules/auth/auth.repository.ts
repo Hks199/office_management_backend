@@ -2,6 +2,7 @@ import mongoose, { Types, trusted, type ClientSession } from 'mongoose';
 import { UserModel } from '../users/user.model.js';
 import { RefreshSessionModel, CredentialTokenModel, LoginAttemptModel } from './auth.models.js';
 import { CredentialDeliveryModel } from './credential-delivery.model.js';
+import { validEmployeePanelSession } from './employee-panel-access.js';
 
 export class AuthRepository {
   transaction<T>(work: (session: ClientSession) => Promise<T>): Promise<T> {
@@ -32,9 +33,11 @@ export class AuthRepository {
   sessionByHash(hash: string, session?: ClientSession) {
     return RefreshSessionModel.findOne({ tokenHash: hash }).select('+csrfHash').session(session ?? null).lean();
   }
-  activeSession(id: Types.ObjectId, userId: Types.ObjectId, session?: ClientSession) {
-    return RefreshSessionModel.findOne({ _id: id, userId, revokedAt: null,
+  async activeSession(id: Types.ObjectId, userId: Types.ObjectId, session?: ClientSession) {
+    const record = await RefreshSessionModel.findOne({ _id: id, userId, revokedAt: null,
       expiresAt: trusted({ $gt: new Date() }), absoluteExpiresAt: trusted({ $gt: new Date() }) }).session(session ?? null).lean();
+    if (record?.employeePanelId && !(await validEmployeePanelSession(record.employeePanelId, userId, id, session))) return null;
+    return record;
   }
   async createSession(data: {
     _id: Types.ObjectId; userId: Types.ObjectId; familyId: string; tokenHash: string;

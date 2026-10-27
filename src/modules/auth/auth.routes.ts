@@ -7,6 +7,7 @@ import { authenticate } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import { loginSchema, forgotSchema, resetSchema, changePasswordSchema } from './auth.validator.js';
 import { rateStore } from '../../middleware/rate-limiter.js';
+import { employeePanelRoutes } from './employee-panel.routes.js';
 
 export function authRoutes(config: AppConfig, service: AuthService): Router {
   const router = Router();
@@ -15,6 +16,8 @@ export function authRoutes(config: AppConfig, service: AuthService): Router {
     handler: (_req, res) => { res.status(429).json({ success: false, message: 'Too many authentication attempts',
       error: { code: 'AUTH_RATE_LIMITED', details: [] } }); } });
   router.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+  router.post('/employee-panels/start', protection);
+  router.use('/employee-panels', employeePanelRoutes(service));
   router.post('/login', protection, validate({ body: loginSchema }), controller.login);
   router.post('/forgot-password', protection, validate({ body: forgotSchema }), controller.forgotPassword);
   router.post('/reset-password', protection, validate({ body: resetSchema }), controller.resetPassword);
