@@ -1,5 +1,10 @@
 import Joi from 'joi';
 
+// Messages contain only fixed guidance or schema variable names, never supplied values.
+export class ConfigurationError extends Error {
+  override readonly name = 'ConfigurationError';
+}
+
 export interface AppConfig {
   nodeEnv: 'development' | 'test' | 'production';
   host: string;
@@ -98,7 +103,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   const result = schema.validate(environment, { abortEarly: false });
   if (result.error) {
     // Joi messages can contain credentials; report only offending variable names.
-    throw new Error(`Invalid environment variables: ${result.error.details.map((detail) => detail.path.join('.')).join(', ')}`);
+    throw new ConfigurationError(`Invalid environment variables: ${result.error.details.map((detail) => detail.path.join('.')).join(', ')}`);
   }
   const value = result.value;
   const corsOrigins = value.CORS_ORIGINS.split(',').map((origin) => origin.trim());
@@ -108,19 +113,19 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
       return !['http:', 'https:'].includes(url.protocol) || url.origin !== origin ||
         (value.NODE_ENV === 'production' && url.protocol !== 'https:' && origin !== 'http://localhost:5173');
     } catch { return true; }
-  })) throw new Error('CORS_ORIGINS must contain exact HTTP(S) origins; production requires HTTPS except http://localhost:5173');
+  })) throw new ConfigurationError('CORS_ORIGINS must contain exact HTTP(S) origins; production requires HTTPS except http://localhost:5173');
   if (value.NODE_ENV === 'production' && value.DOCS_ENABLED) {
-    throw new Error('Public API documentation must be disabled in production');
+    throw new ConfigurationError('Public API documentation must be disabled in production');
   }
   if (value.NODE_ENV === 'production' && value.RATE_LIMIT_STORE !== 'mongo') {
-    throw new Error('Production requires RATE_LIMIT_STORE=mongo for shared request protection');
+    throw new ConfigurationError('Production requires RATE_LIMIT_STORE=mongo for shared request protection');
   }
-  if (!corsOrigins.includes(value.CREDENTIAL_UI_ORIGIN)) throw new Error('CREDENTIAL_UI_ORIGIN must be an allowed CORS origin');
-  if (value.REFRESH_TTL_DAYS > value.REFRESH_ABSOLUTE_DAYS) throw new Error('Refresh sliding lifetime exceeds absolute lifetime');
-  if (value.JWT_SECRET === value.TOKEN_ENCRYPTION_KEY) throw new Error('Use independent signing and encryption keys');
-  if (Boolean(value.SMTP_USER) !== Boolean(value.SMTP_PASSWORD)) throw new Error('SMTP credentials must be configured together');
-  if (value.SMTP_HOST && !value.MAIL_FROM) throw new Error('MAIL_FROM is required with SMTP_HOST');
-  if (Boolean(value.AWS_REGION) !== Boolean(value.S3_BUCKET)) throw new Error('AWS_REGION and S3_BUCKET must be configured together');
+  if (!corsOrigins.includes(value.CREDENTIAL_UI_ORIGIN)) throw new ConfigurationError('CREDENTIAL_UI_ORIGIN must be an allowed CORS origin');
+  if (value.REFRESH_TTL_DAYS > value.REFRESH_ABSOLUTE_DAYS) throw new ConfigurationError('Refresh sliding lifetime exceeds absolute lifetime');
+  if (value.JWT_SECRET === value.TOKEN_ENCRYPTION_KEY) throw new ConfigurationError('Use independent signing and encryption keys');
+  if (Boolean(value.SMTP_USER) !== Boolean(value.SMTP_PASSWORD)) throw new ConfigurationError('SMTP credentials must be configured together');
+  if (value.SMTP_HOST && !value.MAIL_FROM) throw new ConfigurationError('MAIL_FROM is required with SMTP_HOST');
+  if (Boolean(value.AWS_REGION) !== Boolean(value.S3_BUCKET)) throw new ConfigurationError('AWS_REGION and S3_BUCKET must be configured together');
   return {
     nodeEnv: value.NODE_ENV, host: value.HOST, port: value.PORT, logLevel: value.LOG_LEVEL,
     mongodbUri: value.MONGODB_URI, mongoMaxPoolSize: value.MONGODB_MAX_POOL_SIZE,

@@ -144,10 +144,12 @@ rm -- "$target/image.tar"
 compose_at "$target" "$runtime_env" config --quiet
 if [[ "$migrate" == true ]]; then
   [[ -r "$migration_env" ]] || { echo 'Provide the migration configuration with its DB identity.' >&2; exit 1; }
+  printf 'Running production index migration...\n'
   compose_at "$target" "$migration_env" run --rm -T --no-deps --pull never \
     api node dist/scripts/production-indexes.js
 fi
 # Validate the candidate before changing the running deployment or its settings.
+printf 'Running production database preflight...\n'
 compose_at "$target" "$runtime_env" run --rm -T --no-deps --pull never \
   api node dist/scripts/production-preflight.js
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../../src/config/env.js';
+import { ConfigurationError, loadConfig } from '../../src/config/env.js';
 
 const base = { MONGODB_URI: 'mongodb://127.0.0.1:27017/test', JWT_SECRET: 'test-signing-key-'.repeat(4), TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32) };
 
@@ -60,6 +60,8 @@ describe('environment validation', () => {
     expect(() => loadConfig({ ...base, NODE_ENV: 'production', CORS_ORIGINS: 'https://app.example', DOCS_ENABLED: 'true' })).toThrow();
   });
   it('does not leak rejected secret values', () => {
+    expect(() => loadConfig({ ...base, MONGODB_URI: 'secret-password-123' })).toThrow(ConfigurationError);
+    expect(() => loadConfig({ ...base, CORS_ORIGINS: '*' })).toThrow(ConfigurationError);
     expect(() => loadConfig({ ...base, MONGODB_URI: 'secret-password-123' })).toThrow('Invalid environment variables: MONGODB_URI');
   });
   it('requires independent signing and credential-delivery keys', () => {

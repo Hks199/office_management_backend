@@ -77,6 +77,6 @@ systemctl enable --now nginx
 systemctl reload nginx
 systemctl enable --now certbot.timer
 printf '\nEC2 host prepared. Reconnect SSH so the Docker group is active.\n'
-printf 'Configure production settings with: sudoedit %s/shared/backend.env\n' "$app_root"
+printf 'Configure application settings in GitHub Actions secrets/variables; deployment installs %s/shared/backend.env.\n' "$app_root"
 printf 'After DNS resolves here and ports 80/443 are open: sudo certbot --nginx --redirect -d %s\n' "$api_domain"
 printf 'Follow EC2_DEPLOYMENT.md for the separate migration identity, GitHub settings and first deployment.\n'
