@@ -1,19 +1,72 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
-const env = { ...process.env, JWT_SECRET: randomBytes(48).toString('hex'), TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('hex') };
+const env: NodeJS.ProcessEnv = { ...process.env, COMPOSE_DISABLE_ENV_FILE: '1',
+  JWT_SECRET: randomBytes(48).toString('hex'), TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('hex') };
+delete env.COMPOSE_ENV_FILES;
 const project = `sunvika-smoke-${randomBytes(8).toString('hex')}`;
 const compose = ['compose', '--project-name', project, '--file', 'docker-compose.smoke.yml'];
-async function run(args: string[], label: string, capture = false): Promise<string> {
+const secretValues = [...new Set(Object.entries(env)
+  .filter(([name]) => /password|passwd|secret|token|credential|(?:^|_)key(?:_|$)|(?:^|_)(?:uri|url)$/i.test(name))
+  .flatMap(([, value]) => value ? [value, JSON.stringify(value).slice(1, -1), ...value.split(/\r?\n/)] : [])
+  .filter(Boolean))].sort((a, b) => b.length - a.length);
+function redact(value: string): string {
+  for (const secret of secretValues) value = value.split(secret).join('[REDACTED]');
+  return value.replace(/(\b[a-z][a-z\d+.-]*:\/\/)[^\s"'<>/]+@/gi, '$1[REDACTED]@')
+    .replace(/([?&](?:access_token|token|key|password|secret)=)[^&\s"'<>]+/gi, '$1[REDACTED]')
+    .replace(/(authorization\s*[:=]\s*)(?:bearer|basic)\s+[^\r\n]+/gi, '$1[REDACTED]');
+}
+function outputTail() {
+  let output = ''; let partial = ''; let discarding = false;
+  return {
+    append(chunk: string) {
+      for (const fragment of chunk.split(/(\r\n|\r|\n)/)) {
+        if (/^[\r\n]+$/.test(fragment)) {
+          if (!discarding) output = (output + redact(partial) + '\n').slice(-32768);
+          partial = ''; discarding = false;
+        } else if (!discarding) {
+          // Never retain a fragment of an oversized record containing a secret.
+          if (partial.length + fragment.length > 32768) {
+            output = (output + '[oversized log line omitted]\n').slice(-32768);
+            partial = ''; discarding = true;
+          } else partial += fragment;
+        }
+      }
+    },
+    read() { return output + (discarding ? '' : redact(partial)); },
+  };
+}
+async function run(args: string[], label: string, capture = false, deadlineMs = 300000): Promise<string> {
+  if (!capture) process.stdout.write(`${label}...\n`);
   return new Promise((resolve, reject) => {
-    const child = spawn('docker', args, { env, stdio: ['ignore', 'pipe', 'pipe'] }); let output = '';
-    child.stdout.on('data', (chunk: Buffer) => { if (capture) output += chunk.toString(); });
-    // Provider/Compose failures can contain environment/URI values. Emit labels only.
-    child.stderr.resume();
-    const timeout = setTimeout(() => { child.kill(); reject(new Error(`${label} exceeded its deadline`)); }, 300000);
+    const child = spawn('docker', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout = outputTail(); const stderr = outputTail(); let timedOut = false;
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout.append(chunk); });
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr.append(chunk); });
+    const timeout = setTimeout(() => { timedOut = true; child.kill(); }, deadlineMs);
     child.once('error', () => { clearTimeout(timeout); reject(new Error(`${label}: Docker unavailable`)); });
-    child.once('close', (code) => { clearTimeout(timeout); if (code === 0) resolve(output.trim()); else reject(new Error(`${label} failed (${String(code)})`)); });
+    child.once('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0 && !timedOut) { resolve(capture ? stdout.read().trim() : ''); return; }
+      const detail = [stdout.read(), stderr.read()].join('\n').trim().slice(-8000);
+      const failure = timedOut ? `${label} exceeded its deadline` : `${label} failed (${String(code)})`;
+      reject(new Error(detail ? `${failure}\n${detail}` : failure));
+    });
   });
+}
+async function diagnoseFailure() {
+  const commands: [string[], string][] = [
+    [[...compose, 'ps', '--all'], 'Smoke container status'],
+    [[...compose, 'logs', '--no-color', '--tail', '60', 'mongo'], 'Smoke MongoDB logs'],
+  ];
+  for (const [args, label] of commands) {
+    try {
+      const detail = await run(args, label, true, 15000);
+      process.stderr.write(`${label}:\n${detail || '(no container output)'}\n`);
+    } catch (error) {
+      process.stderr.write(`${error instanceof Error ? error.message : `${label} unavailable`}\n`);
+    }
+  }
 }
 async function main() {
   if (process.argv.includes('--config-only')) {
@@ -26,8 +79,11 @@ async function main() {
     return;
   }
   await run(['info', '--format', '{{.ServerVersion}}'], 'Docker engine preflight');
+  let failed = false;
+  let cleanupFailure: Error | undefined;
   try {
-    await run([...compose, 'up', '-d', '--wait', '--wait-timeout', '120', 'mongo'], 'Replica set startup');
+    await run([...compose, 'pull', '--policy', 'missing', 'mongo'], 'MongoDB image pull');
+    await run([...compose, 'up', '-d', '--pull', 'never', '--wait', '--wait-timeout', '120', 'mongo'], 'Replica set startup');
     await run([...compose, 'build', 'api'], 'Production image build');
     await run([...compose, 'run', '--rm', '--no-deps', 'api', 'node', 'dist/scripts/production-indexes.js'], 'Index migration');
     await run([...compose, 'run', '--rm', '--no-deps', 'api', 'node', 'dist/scripts/production-preflight.js'], 'Read-only preflight');
@@ -38,9 +94,19 @@ async function main() {
     const id = await run([...compose, 'ps', '-aq', 'api'], 'Container lookup', true);
     if (await run(['inspect', '--format', '{{.State.ExitCode}}', id], 'Exit status', true) !== '0') throw new Error('API did not stop gracefully');
     process.stdout.write('Container build, migration, readiness, non-root/read-only runtime, security and SIGTERM smoke passed.\n');
+  } catch (error) {
+    failed = true;
+    await diagnoseFailure();
+    throw error;
   } finally {
     // Only the randomly named project created by this invocation; no deployment resources.
-    await run([...compose, 'down', '--volumes', '--remove-orphans'], 'Isolated smoke cleanup');
+    try { await run([...compose, 'down', '--volumes', '--remove-orphans'], 'Isolated smoke cleanup'); }
+    catch (error) {
+      const failure = error instanceof Error ? error : new Error('Isolated smoke cleanup failed');
+      if (failed) process.stderr.write(`Cleanup also failed: ${failure.message}\n`);
+      else cleanupFailure = failure;
+    }
   }
+  if (cleanupFailure) throw cleanupFailure;
 }
 main().catch((error: unknown) => { process.stderr.write(`${error instanceof Error ? error.message : 'Container smoke failed'}\n`); process.exitCode = 1; });
