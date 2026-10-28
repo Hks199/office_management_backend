@@ -106,9 +106,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     try {
       const url = new URL(origin);
       return !['http:', 'https:'].includes(url.protocol) || url.origin !== origin ||
-        (value.NODE_ENV === 'production' && url.protocol !== 'https:');
+        (value.NODE_ENV === 'production' && url.protocol !== 'https:' && origin !== 'http://localhost:5173');
     } catch { return true; }
-  })) throw new Error('CORS_ORIGINS must contain exact HTTP(S) origins; production requires HTTPS');
+  })) throw new Error('CORS_ORIGINS must contain exact HTTP(S) origins; production requires HTTPS except http://localhost:5173');
   if (value.NODE_ENV === 'production' && value.DOCS_ENABLED) {
     throw new Error('Public API documentation must be disabled in production');
   }

@@ -85,6 +85,8 @@ Other names listed in [deploy/ec2/backend.env.example](deploy/ec2/backend.env.ex
 
 If your frontend is not ready, use temporary `CORS_ORIGINS=https://sunvika.niakylie.com` and `CREDENTIAL_UI_ORIGIN=https://sunvika.niakylie.com`, and leave `CREDENTIAL_DELIVERY_ENABLED=false`. Replace both origins with the actual frontend HTTPS address and configure SMTP before enabling invitations/resets. Production cookies use `SameSite=Strict`, so frontend/API must share the same site or origin.
 
+For the local Vite frontend proxy, append `http://localhost:5173` to the existing `CORS_ORIGINS` list, for example `https://sunvika.niakylie.com,http://localhost:5173`. Production validation permits HTTP only for this exact local origin. Preserve the other trusted origins and update the GitHub setting so the next deployment keeps the change.
+
 The workflow writes a private mode-0600 interpolation file, transfers it over SSH, and the deploy helper installs it as `/opt/sunvika-office/shared/backend.env` with root ownership and mode 0640 under the deployment lock. Values are quoted for Compose without printing them. The production Compose file enforces `NODE_ENV=production`, `DOCS_ENABLED=false` and `RATE_LIMIT_STORE=mongo`; other arbitrary GitHub values are not forwarded. Use an EC2 instance role for AWS credentials rather than expecting static AWS access keys to be forwarded.
 
 After DNS resolves to EC2 and ports 80/443 are reachable, configure HTTPS:

@@ -37,9 +37,24 @@ describe('environment validation', () => {
   it.each(['*', 'https://app.example/path', 'https://user:pass@app.example', 'null', 'http://localhost:5173,'])('rejects unsafe origin %s', (origin) => {
     expect(() => loadConfig({ ...base, CORS_ORIGINS: origin })).toThrow();
   });
-  it('requires HTTPS origins in production', () => {
-    expect(() => loadConfig({ ...base, NODE_ENV: 'production' })).toThrow();
-    expect(loadConfig({ ...base, NODE_ENV: 'production', RATE_LIMIT_STORE: 'mongo', CORS_ORIGINS: 'https://app.example', CREDENTIAL_UI_ORIGIN: 'https://app.example' }).docsEnabled).toBe(false);
+  it('allows existing HTTPS origins and the exact local frontend origin in production', () => {
+    const origins = ['https://sunvika.niakylie.com', 'https://app.example', 'http://localhost:5173'];
+    const config = loadConfig({ ...base, NODE_ENV: 'production', RATE_LIMIT_STORE: 'mongo',
+      CORS_ORIGINS: origins.join(','), CREDENTIAL_UI_ORIGIN: 'https://app.example' });
+    expect(config.corsOrigins).toEqual(origins);
+    expect(config.credentialUiOrigin).toBe('https://app.example');
+    expect(config.docsEnabled).toBe(false);
+  });
+  it.each([
+    'http://app.example', 'http://127.0.0.1:5173', 'http://[::1]:5173',
+    'http://localhost', 'http://localhost:5174', 'http://localhost:05173',
+    'http://localhost.example:5173', 'http://localhost.:5173', 'http://LOCALHOST:5173',
+    'http://localhost:5173/', 'http://localhost:5173/path', 'http://localhost:5173?query=1',
+    'http://localhost:5173#fragment', 'http://user:pass@localhost:5173', '*',
+  ])('rejects production origin outside the exact local frontend exception: %s', (origin) => {
+    expect(() => loadConfig({ ...base, NODE_ENV: 'production', RATE_LIMIT_STORE: 'mongo',
+      CORS_ORIGINS: `https://app.example,${origin}`, CREDENTIAL_UI_ORIGIN: 'https://app.example' }))
+      .toThrow('production requires HTTPS except http://localhost:5173');
   });
   it('forbids public production docs', () => {
     expect(() => loadConfig({ ...base, NODE_ENV: 'production', CORS_ORIGINS: 'https://app.example', DOCS_ENABLED: 'true' })).toThrow();

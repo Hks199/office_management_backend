@@ -9,6 +9,7 @@ import { validate } from '../../src/middleware/validate.js';
 import { sanitizeInput } from '../../src/middleware/sanitize-input.js';
 import { errorHandler } from '../../src/middleware/error-handler.js';
 import { createLogger } from '../../src/config/logger.js';
+import { loadConfig } from '../../src/config/env.js';
 import { paginationSchema, locationSchema } from '../../src/shared/utils/validation-schemas.js';
 
 describe('HTTP security boundaries', () => {
@@ -31,6 +32,26 @@ describe('HTTP security boundaries', () => {
     const preflight = await request(app).options('/api/v1/employees').set('Origin', 'http://localhost:5173')
       .set('Access-Control-Request-Method', 'POST').expect(204);
     expect(preflight.headers['access-control-allow-credentials']).toBe('true');
+  });
+  it('serves production CORS preflights for trusted HTTPS and the exact local frontend', async () => {
+    const trustedOrigins = ['https://sunvika.niakylie.com', 'http://localhost:5173'];
+    const config = loadConfig({ NODE_ENV: 'production', LOG_LEVEL: 'silent', RATE_LIMIT_STORE: 'mongo',
+      MONGODB_URI: 'mongodb://127.0.0.1:27017/sunvika-test', JWT_SECRET: 'test-signing-key-'.repeat(4),
+      TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32), CORS_ORIGINS: trustedOrigins.join(','),
+      CREDENTIAL_UI_ORIGIN: 'https://sunvika.niakylie.com' });
+    const app = createApp(config, { logger: createLogger(config), isDatabaseReady: () => Promise.resolve(true) });
+    for (const origin of trustedOrigins) {
+      const preflight = await request(app).options('/api/v1/auth/login').set('Origin', origin)
+        .set('Access-Control-Request-Method', 'POST').set('Access-Control-Request-Headers', 'content-type').expect(204);
+      expect(preflight.headers['access-control-allow-origin']).toBe(origin);
+      expect(preflight.headers['access-control-allow-credentials']).toBe('true');
+    }
+    const rejected = await request(app).options('/api/v1/auth/login').set('Origin', 'https://attacker.invalid')
+      .set('Access-Control-Request-Method', 'POST').expect(403);
+    expect(rejected.headers['access-control-allow-origin']).toBeUndefined();
+    const health = await request(app).get('/api/v1/health/live').set('Origin', 'http://localhost:5173').expect(200);
+    expect(health.headers['access-control-allow-origin']).toBe('http://localhost:5173');
+    expect(health.headers['access-control-allow-credentials']).toBe('true');
   });
   it('bounds JSON bodies and reports malformed JSON safely', async () => {
     const app = testApp({ bodyLimitBytes: 1024 });
