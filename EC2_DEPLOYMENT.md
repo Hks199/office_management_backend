@@ -2,7 +2,7 @@
 
 This deploys `sunvika-office-backend` on one Ubuntu 24.04 or 26.04 **amd64/x86_64** EC2 instance using the existing production Docker Compose configuration and host Nginx. The GitHub-hosted runner builds an amd64 Node 24 image; an ARM/Graviton instance needs a separate ARM build workflow. Redis is not used by this application.
 
-`.github/workflows/ci.yml` checks the application, deployment scripts, mocked release/worker behavior and isolated container startup. After **Backend checks** succeeds for a `main` push from this repository, `.github/workflows/deploy.yaml` verifies the checked commit is still the current `main` revision, builds it, packages the image with production Compose, renders the application environment from GitHub secrets/variables, uploads the release, checked deployment helper and private configuration over verified SSH, refreshes the installed helper, and invokes it. Older successful runs, pull requests and unsuccessful checks do not deploy. These files prepare deployment; they do not provision AWS resources or certify the live environment.
+`.github/workflows/ci.yml` checks the application, deployment scripts, mocked release/worker behavior and isolated container startup. After **Backend checks** succeeds for a `main` push from this repository, `.github/workflows/deploy.yaml` verifies the checked commit is still the current `main` revision, builds it, packages the image with production Compose, renders the application environment from GitHub secrets/variables, uploads the release, checked deployment helper and private configuration over verified SSH, refreshes the installed helper, and invokes it. You can also start deployment with **Run workflow** on `main`; this requires successful **Backend checks** for a push of that exact current-main commit. Older successful runs, pull requests and unsuccessful checks do not deploy. These files prepare deployment; they do not provision AWS resources or certify the live environment.
 
 ## 1. Prepare AWS and DNS
 
@@ -128,7 +128,18 @@ Restrict the production environment to the intended production branch and config
 
 Production disables automatic collection/index creation. For the initial deployment, set `RUN_INDEX_MIGRATION=true` in GitHub's production environment. Optionally add **`MIGRATION_MONGODB_URI`** as a GitHub Secret for a separate database identity permitted to create collections/indexes in the same database. If it is absent, migration uses `MONGODB_URI`, whose identity must then have those permissions. Migration receives the same application settings as the new runtime configuration with only this URI overridden; it does not reuse a stale host `migrate.env`. Its private staging file is removed after deployment.
 
-Push the prepared code to `main`. If the current `main` commit is already pushed, open **Actions > Backend checks > the latest current-main push run > Re-run all jobs**. Wait for **Backend checks**, then separately for **Deploy office backend to EC2**, to succeed. There is no manual **Run workflow** button: deployment is triggered by the successful eligible checks. If retrying the deployment workflow, choose **Re-run all jobs**, because release/artifact names include the run attempt and a deploy-only retry can refer to an earlier attempt's package.
+Push the prepared code to `main` and wait for **Backend checks** on that commit to succeed. Its successful push run triggers deployment automatically. If the code is already pushed but checks need rerunning, open **Actions > Backend checks > the latest current-main push run > Re-run all jobs**.
+
+If EC2 has no `current/image.id`, an empty `releases/` directory and no application container, the host is prepared but no release is active. To start a deployment explicitly:
+
+1. Make sure the updated workflow is pushed to `main` and **Backend checks** has succeeded for that exact commit.
+2. Open **Actions > Deploy office backend to EC2 > Run workflow**.
+3. Select branch **main**, then select **Run workflow**. Keep `RUN_INDEX_MIGRATION=true` for the first deployment as described above.
+4. Open the new run and check its job summary. The eligibility check requires the selected commit to remain current `main` and the latest `ci.yml` push run for that exact commit, from this repository, to have completed successfully. Manual deployment does not bypass CI.
+5. Open the deployment job's **Check deployment server** step. Compare its hostname with the EC2 terminal you intend to deploy to (for example, `ip-172-31-2-140`). Privately compare the instance's current public IPv4 in the AWS console with the `EC2_HOST` GitHub secret; an IP change or different host can explain a release missing from your terminal. Do not print the secret in logs.
+6. Wait for the final verification and a **Deployed** job summary showing the activated release and successful local readiness check. Then reset `RUN_INDEX_MIGRATION=false`.
+
+A green workflow can contain skipped deployment jobs. For an older main commit, a pull request or unsuccessful checks, the eligibility summary explains **Skipped** and no release is deployed. Read the summary and the `package`/`deploy` job statuses rather than relying only on the workflow's green icon. If retrying a failed deployment run, choose **Re-run all jobs**, because release/artifact names include the run attempt and a deploy-only retry can refer to an earlier attempt's package.
 
 The deploy helper runs compiled `production-indexes.js` with the generated migration configuration, then always runs the read-only `production-preflight.js` with the new runtime identity before activating the release. The runtime identity needs collection/index metadata access for this preflight, alongside its required application permissions. Reset `RUN_INDEX_MIGRATION=false` after the reviewed migration succeeds. A first deployment can create the runtime environment automatically; no application environment upload is needed.
 
@@ -144,7 +155,7 @@ curl --fail https://sunvika.niakylie.com/api/v1/health/ready
 
 ## 6. Operations, workers and rollback
 
-To inspect the current API on EC2:
+After a successful deployment has created `current/image.id`, inspect the current API on EC2. If that file is missing, follow the first-release recovery in section 5 before running these Compose commands:
 
 ```sh
 cd /opt/sunvika-office

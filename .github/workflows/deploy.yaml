@@ -5,43 +5,76 @@ on:
     workflows: [Backend checks]
     types: [completed]
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: sunvika-office-production-${{ github.event.workflow_run.conclusion }}-${{ github.event.workflow_run.event }}-${{ github.event.workflow_run.head_repository.full_name }}
+  group: sunvika-office-production-${{ github.event.workflow_run.conclusion || 'success' }}-${{ github.event.workflow_run.event || 'push' }}-${{ github.event.workflow_run.head_repository.full_name || github.repository }}
   cancel-in-progress: false
 
 jobs:
   eligible:
-    # Never promote a PR build or code from another repository.
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       promote: ${{ steps.current.outputs.promote }}
+      source_sha: ${{ steps.current.outputs.source_sha }}
     steps:
-      - name: Skip successful checks for an older main revision
+      - name: Select current main commit with successful CI
         id: current
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_REF: ${{ github.ref }}
+          SOURCE_EVENT: ${{ github.event.workflow_run.event }}
+          SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SOURCE_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
-          current_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-          if [[ "$current_sha" == "$SOURCE_SHA" ]]; then
-            echo 'promote=true' >> "$GITHUB_OUTPUT"
-          else
+          skip_deployment() {
             echo 'promote=false' >> "$GITHUB_OUTPUT"
-            echo 'A newer main revision exists; skipping this deployment.'
+            printf '## Deployment skipped\n\n%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::$1"
+            exit 0
+          }
+          reject_deployment() {
+            echo 'promote=false' >> "$GITHUB_OUTPUT"
+            printf '## Deployment blocked\n\n%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::$1"
+            exit 1
+          }
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$DISPATCH_REF" == refs/heads/main ]] || reject_deployment 'Choose main when using Run workflow.'
+          elif [[ "$EVENT_NAME" == workflow_run ]]; then
+            if [[ "$SOURCE_EVENT" != push || "$SOURCE_CONCLUSION" != success || "$SOURCE_BRANCH" != main || "$SOURCE_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
+              skip_deployment 'Only successful Backend checks for a main push from this repository deploy automatically.'
+            fi
+          else
+            reject_deployment 'Unsupported deployment event.'
           fi
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] || reject_deployment 'Invalid source commit.'
+          current_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$current_sha" != "$SOURCE_SHA" ]]; then
+            if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+              reject_deployment 'Main changed. Run this workflow again using the latest main commit.'
+            fi
+            skip_deployment 'A newer main commit exists. This run did not upload or start an application.'
+          fi
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            ci_result="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs"               -f branch=main -f event=push -f head_sha="$SOURCE_SHA" -f per_page=100               --jq '.workflow_runs | max_by(.run_number) | [.status // "missing", .conclusion // "missing", .head_sha // "missing", .head_repository.full_name // "missing", .event // "missing", .head_branch // "missing"] | @tsv')"
+            IFS=$'\t' read -r ci_status ci_conclusion ci_sha ci_repository ci_event ci_branch <<< "$ci_result"
+            if [[ "$ci_status" != completed || "$ci_conclusion" != success || "$ci_sha" != "$SOURCE_SHA" || "$ci_repository" != "$GITHUB_REPOSITORY" || "$ci_event" != push || "$ci_branch" != main ]]; then
+              reject_deployment 'The latest Backend checks push run for this main commit must finish successfully before deployment. Wait for CI, then use Run workflow again.'
+            fi
+          fi
+          printf 'promote=true\nsource_sha=%s\n' "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          printf '## Deployment selected\n\nCommit: %s\n\nPackaging and EC2 deployment still need to complete.\n' "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
 
   package:
     needs: eligible
@@ -49,11 +82,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
-      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_SHA: ${{ needs.eligible.outputs.source_sha }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ needs.eligible.outputs.source_sha }}
           persist-credentials: false
       - name: Build and package the checked commit
         shell: bash
@@ -79,12 +112,12 @@ jobs:
           if-no-files-found: error
 
   deploy:
-    needs: package
+    needs: [eligible, package]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: production
     env:
-      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_SHA: ${{ needs.eligible.outputs.source_sha }}
       EC2_HOST: ${{ secrets.EC2_HOST }}
       EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
       EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
@@ -94,7 +127,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ needs.eligible.outputs.source_sha }}
           persist-credentials: false
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
@@ -167,6 +200,34 @@ jobs:
             ServerAliveInterval 15
             ServerAliveCountMax 4
           EOF
+      - name: Confirm selected commit is still current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$current_sha" != "$SOURCE_SHA" ]]; then
+            echo '::error::Main changed during packaging. Run deployment for the latest checked main commit.'
+            exit 1
+          fi
+      - name: Check deployment server
+        shell: bash
+        run: |
+          ssh office-ec2 'bash -se' <<'REMOTE'
+          printf 'Connected server: '
+          hostname
+          printf 'Deployment user: '
+          id -un
+          cd /opt/sunvika-office
+          printf 'Deployment directory: %s\n' "$PWD"
+          test -d incoming
+          test -d releases
+          test -r shared/backend.env
+          sudo -n true
+          docker info >/dev/null
+          docker compose version
+          REMOTE
       - name: Upload and deploy release
         shell: bash
         run: |
@@ -190,6 +251,23 @@ jobs:
           # The release identifier is validated locally before expansion.
           # shellcheck disable=SC2029
           ssh office-ec2 "/usr/local/bin/sunvika-office-deploy '$release' '$RUN_INDEX_MIGRATION' github"
+      - name: Verify active EC2 release
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          release="${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # The release identifier is validated locally before expansion.
+          # shellcheck disable=SC2029
+          ssh office-ec2 "bash -se -- '$release'" <<'REMOTE'
+          release="$1"
+          cd /opt/sunvika-office
+          [[ "$(readlink -f current)" == "$PWD/releases/$release" ]]
+          [[ "$(cat current/image.id)" =~ ^sha256:[a-f0-9]{64}$ ]]
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:3000/api/v1/health/ready >/dev/null
+          printf 'Verified active release: %s\n' "$release"
+          REMOTE
       - name: Remove remote staged environment
         if: always() && steps.ssh.outcome == 'success'
         shell: bash
@@ -204,3 +282,14 @@ jobs:
         if: always()
         shell: bash
         run: rm -f "$RUNNER_TEMP/office_ec2_config/backend.env" "$RUNNER_TEMP/office_ec2_config/migrate.env" "$RUNNER_TEMP/office_ec2_key" "$RUNNER_TEMP/office_ec2_known_hosts" ~/.ssh/config
+      - name: Report deployment result
+        if: always()
+        env:
+          VERIFICATION_RESULT: ${{ steps.verify.outcome }}
+        shell: bash
+        run: |
+          if [[ "$VERIFICATION_RESULT" == success ]]; then
+            printf '## Deployed to EC2\n\nCommit: %s\n\nThe active release, image ID, and local readiness endpoint were verified. See **Check deployment server** for the hostname.\n' "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '## Deployment did not complete\n\nInspect the failed step above. A successful Backend checks run alone does not create a release on EC2.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
