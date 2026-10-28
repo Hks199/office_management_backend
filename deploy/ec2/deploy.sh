@@ -118,16 +118,26 @@ python3 - "$release.tar.gz" <<'PY'
 import sys, tarfile
 with tarfile.open(sys.argv[1], 'r:gz') as archive:
     entries = list(archive)
-    if (sorted(entry.name for entry in entries) != ['compose.yaml', 'image.id', 'image.tar']
+    if (sorted(entry.name for entry in entries) != ['compose.yaml', 'image.config.id', 'image.tar', 'image_identity.py']
             or any(not entry.isfile() for entry in entries)):
         raise SystemExit('Unexpected release archive contents')
 PY
 mkdir "$target"
 tar -xzf "$release.tar.gz" -C "$target" --no-same-owner --no-same-permissions
-docker image load --input "$target/image.tar" >/dev/null
-image_id="$(cat "$target/image.id")"
-[[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
-[[ "$(docker image inspect --format '{{.Id}}' "$image_id")" == "$image_id" ]]
+image_ref="sunvika-office-api:$release"
+config_id="$(cat "$target/image.config.id")"
+[[ "$config_id" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'Invalid packaged image config digest.' >&2; exit 1; }
+archive_config_id="$(python3 "$target/image_identity.py" archive "$target/image.tar" "$image_ref")"
+[[ "$archive_config_id" == "$config_id" ]] || { echo 'Packaged image config digest does not match the image archive.' >&2; exit 1; }
+printf 'Verified packaged image config: %s\n' "$config_id"
+printf 'Loading release image: %s\n' "$image_ref"
+docker image load --input "$target/image.tar"
+# Image IDs can change between classic and containerd image stores. Verify the
+# loaded image's portable config digest before pinning its host-local image ID.
+image_id="$(python3 "$target/image_identity.py" resolve "$image_ref" "$config_id")"
+[[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'Invalid loaded image ID.' >&2; exit 1; }
+printf '%s\n' "$image_id" > "$target/image.id"
+printf 'Verified EC2 image: %s (config %s)\n' "$image_id" "$config_id"
 # Keep only the installed image and small release metadata after loading.
 rm -- "$target/image.tar"
 

@@ -7,13 +7,15 @@ scripts="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$suite/bin" "$suite/fixture"
 export MOCK_CALLS="$suite/calls"
 export MOCK_ENV_CALLS="$suite/env-calls"
-export MOCK_IMAGE_ID=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-printf '%s\n' "$MOCK_IMAGE_ID" > "$suite/fixture/image.id"
-printf 'mock image\n' > "$suite/fixture/image.tar"
+export MOCK_IMAGE_CALLS="$suite/image-calls"
+export MOCK_LOADED_ARCHIVE="$suite/loaded.tar"
+export MOCK_WRONG_IMAGE_ARCHIVE="$suite/fixture/wrong-image.tar"
 printf 'services: {}\n' > "$suite/fixture/compose.yaml"
 cat > "$suite/bin/docker" <<'EOF'
 #!/usr/bin/env bash
+set -euo pipefail
 printf '%s\n' "$*" >> "$MOCK_CALLS"
+printf '%s|%s\n' "${API_IMAGE:-}" "$*" >> "$MOCK_IMAGE_CALLS"
 args=("$@")
 for ((index=0; index<${#args[@]}; index++)); do
   if [[ "${args[index]}" == --env-file ]]; then
@@ -22,7 +24,35 @@ for ((index=0; index<${#args[@]}; index++)); do
     break
   fi
 done
-if [[ "$*" == 'image inspect '* ]]; then printf '%s\n' "$MOCK_IMAGE_ID"; exit 0; fi
+if [[ "$1 $2" == 'image load' ]]; then
+  [[ "${MOCK_IMAGE_LOAD_FAIL:-false}" != true ]] || exit 1
+  [[ "$3" == --input ]]
+  cp -- "$4" "$MOCK_LOADED_ARCHIVE"
+  printf 'Loaded image: %s\n' "$MOCK_IMAGE_TAG"
+  exit 0
+fi
+if [[ "$1 $2" == 'image inspect' ]]; then
+  [[ "${MOCK_IMAGE_INSPECT_FAIL:-false}" != true ]] || exit 1
+  [[ "$3" == --format && "$4" == '{{json .}}' ]]
+  [[ "$5" == "$MOCK_IMAGE_TAG" || "$5" == "$MOCK_IMAGE_ID" ]]
+  python3 - <<'PY'
+import json, os
+print(json.dumps({"Id": os.environ["MOCK_IMAGE_ID"],
+                  "RepoTags": [os.environ["MOCK_IMAGE_TAG"]],
+                  "Os": "linux", "Architecture": "amd64"}))
+PY
+  exit 0
+fi
+if [[ "$1 $2" == 'image save' ]]; then
+  [[ "${MOCK_IMAGE_SAVE_FAIL:-false}" != true ]] || exit 1
+  [[ "$3" == "$MOCK_IMAGE_ID" && "$#" == 3 ]]
+  if [[ "${MOCK_WRONG_EXPORTED_CONFIG:-false}" == true ]]; then
+    cat -- "$MOCK_WRONG_IMAGE_ARCHIVE"
+  else
+    cat -- "$MOCK_LOADED_ARCHIVE"
+  fi
+  exit 0
+fi
 if [[ "${MOCK_PREFLIGHT_FAIL:-false}" == true && "$*" == *production-preflight.js* ]]; then exit 1; fi
 if [[ "${MOCK_MIGRATION_FAIL:-false}" == true && "$*" == *production-indexes.js* ]]; then exit 1; fi
 if [[ "${MOCK_COMMERCIAL_FAIL:-false}" == true && "$*" == *process-commercial-jobs.js* ]]; then exit 1; fi
@@ -63,9 +93,40 @@ new_root() {
   printf 'VALUE=stale-migration\n' > "$SUNVIKA_DEPLOY_ROOT/shared/migrate.env"
   : > "$MOCK_CALLS"
   : > "$MOCK_ENV_CALLS"
+  : > "$MOCK_IMAGE_CALLS"
 }
 package() {
-  tar -czf "$SUNVIKA_DEPLOY_ROOT/incoming/$1.tar.gz" -C "$suite/fixture" image.tar image.id compose.yaml
+  export MOCK_IMAGE_TAG="sunvika-office-api:$1"
+  # Deliberately use a host-local manifest ID distinct from the portable config.
+  # Each release also has a distinct ID, so rollback tests can catch wrong pins.
+  MOCK_IMAGE_ID="sha256:$(printf '%s' "$1" | sha256sum | cut -d ' ' -f 1)"
+  export MOCK_IMAGE_ID
+  python3 - "$suite/fixture" "$MOCK_IMAGE_TAG" <<'PY'
+import hashlib, io, json, os, sys, tarfile
+from pathlib import Path
+folder = Path(sys.argv[1])
+tag = os.environ.get("MOCK_ARCHIVE_TAG", sys.argv[2])
+config = {"architecture": os.environ.get("MOCK_ARCHIVE_ARCH", "amd64"),
+          "os": "linux", "config": {"Cmd": ["node"]},
+          "rootfs": {"type": "layers", "diff_ids": []}, "history": []}
+def image_archive(path, value):
+    raw = json.dumps(value, separators=(",", ":")).encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    config_name = digest + ".json"
+    manifest = json.dumps([{"Config": config_name, "RepoTags": [tag], "Layers": []}]).encode()
+    with tarfile.open(path, "w") as archive:
+        for name, data in ((config_name, raw), ("manifest.json", manifest)):
+            entry = tarfile.TarInfo(name)
+            entry.size = len(data)
+            archive.addfile(entry, io.BytesIO(data))
+    return "sha256:" + digest
+config_id = image_archive(folder / "image.tar", config)
+(folder / "image.config.id").write_text(os.environ.get("MOCK_CONFIG_ID", config_id) + "\n")
+config["config"] = {"Cmd": ["wrong-image"]}
+image_archive(folder / "wrong-image.tar", config)
+PY
+  cp -- "$scripts/image_identity.py" "$suite/fixture/image_identity.py"
+  tar -czf "$SUNVIKA_DEPLOY_ROOT/incoming/$1.tar.gz" -C "$suite/fixture" image.tar image.config.id image_identity.py compose.yaml
   (cd "$SUNVIKA_DEPLOY_ROOT/incoming" && sha256sum "$1.tar.gz" > "$1.sha256")
 }
 expect_failure() {
@@ -77,18 +138,27 @@ new_root releases
 package "$first"
 bash "$scripts/deploy.sh" "$first" true
 current_is "$first"
+first_image_id="$MOCK_IMAGE_ID"
+[[ "$(cat "$SUNVIKA_DEPLOY_ROOT/current/image.id")" == "$first_image_id" ]]
+[[ "$first_image_id" != "$(cat "$SUNVIKA_DEPLOY_ROOT/current/image.config.id")" ]]
+grep -Fq "image save $first_image_id" "$MOCK_CALLS"
 grep -q production-indexes.js "$MOCK_CALLS"
 grep -q production-preflight.js "$MOCK_CALLS"
 package "$second"
 : > "$MOCK_CALLS"
 bash "$scripts/deploy.sh" "$second"
 current_is "$second"
+second_image_id="$MOCK_IMAGE_ID"
+[[ "$second_image_id" != "$first_image_id" ]]
+[[ "$(cat "$SUNVIKA_DEPLOY_ROOT/current/image.id")" == "$second_image_id" ]]
 [[ "$(basename "$(readlink -f "$SUNVIKA_DEPLOY_ROOT/previous")")" == "$first" ]]
 if grep -q production-indexes.js "$MOCK_CALLS"; then echo 'Unrequested migration ran' >&2; exit 1; fi
 export MOCK_BAD_RELEASE="$sha-3-1"
 package "$MOCK_BAD_RELEASE"
+: > "$MOCK_IMAGE_CALLS"
 expect_failure "$MOCK_BAD_RELEASE"
 current_is "$second"
+grep -Fq "$second_image_id|compose --project-name sunvika-office --env-file $SUNVIKA_DEPLOY_ROOT/shared/backend.env --file $SUNVIKA_DEPLOY_ROOT/releases/$second/compose.yaml up " "$MOCK_IMAGE_CALLS"
 unset MOCK_BAD_RELEASE
 export MOCK_HEALTH_BAD_RELEASE="$sha-6-1"
 package "$MOCK_HEALTH_BAD_RELEASE"
@@ -107,9 +177,11 @@ current_is "$second"
 unset MOCK_MIGRATION_FAIL
 
 : > "$MOCK_CALLS"
+: > "$MOCK_IMAGE_CALLS"
 bash "$scripts/run-jobs.sh"
 grep -q process-commercial-jobs.js "$MOCK_CALLS"
 grep -q process-dashboard-jobs.js "$MOCK_CALLS"
+[[ "$(cut -d '|' -f 1 "$MOCK_IMAGE_CALLS" | sort -u)" == "$second_image_id" ]]
 : > "$MOCK_CALLS"
 export MOCK_COMMERCIAL_FAIL=true
 if bash "$scripts/run-jobs.sh"; then echo 'Worker failure was hidden' >&2; exit 1; fi
@@ -277,4 +349,45 @@ config_is original
 no_private_material "$first"
 [[ ! -d "$SUNVIKA_DEPLOY_ROOT/releases/$first" ]]
 
-echo 'Deployment tests passed: activation, migration/preflight, image and configuration rollback, private-file cleanup, checksum, scheduled jobs and lock contention.'
+# Invalid or mismatched transported images must never change a running release
+# or install its candidate configuration, including when Docker commands fail.
+new_root image-identity
+package "$first"
+stage_config "$first" accepted
+bash "$scripts/deploy.sh" "$first" false github
+accepted_image_id="$MOCK_IMAGE_ID"
+identity_case=20
+for issue in archive-tag config-mismatch malformed-config platform load inspect export loaded-config; do
+  identity_case=$((identity_case + 1))
+  candidate="$sha-$identity_case-1"
+  case "$issue" in
+    archive-tag) export MOCK_ARCHIVE_TAG=sunvika-office-api:wrong-release ;;
+    config-mismatch) export MOCK_CONFIG_ID=sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff ;;
+    malformed-config) export MOCK_CONFIG_ID=not-an-image-digest ;;
+    platform) export MOCK_ARCHIVE_ARCH=arm64 ;;
+    load) export MOCK_IMAGE_LOAD_FAIL=true ;;
+    inspect) export MOCK_IMAGE_INSPECT_FAIL=true ;;
+    export) export MOCK_IMAGE_SAVE_FAIL=true ;;
+    loaded-config) export MOCK_WRONG_EXPORTED_CONFIG=true ;;
+  esac
+  package "$candidate"
+  stage_config "$candidate" rejected true
+  : > "$MOCK_CALLS"
+  expect_failure "$candidate" true github
+  unset MOCK_ARCHIVE_TAG MOCK_CONFIG_ID MOCK_ARCHIVE_ARCH MOCK_IMAGE_LOAD_FAIL \
+    MOCK_IMAGE_INSPECT_FAIL MOCK_IMAGE_SAVE_FAIL MOCK_WRONG_EXPORTED_CONFIG
+  current_is "$first"
+  config_is accepted
+  [[ "$(cat "$SUNVIKA_DEPLOY_ROOT/current/image.id")" == "$accepted_image_id" ]]
+  [[ ! -e "$SUNVIKA_DEPLOY_ROOT/releases/$candidate/image.id" ]]
+  no_private_material "$candidate"
+  if grep -q '^compose ' "$MOCK_CALLS"; then
+    echo "Unverified image reached Compose: $issue" >&2
+    exit 1
+  fi
+  case "$issue" in
+    archive-tag|config-mismatch|malformed-config|platform) [[ ! -s "$MOCK_CALLS" ]] ;;
+  esac
+done
+
+echo 'Deployment tests passed: portable image identity, host-local pins, activation, migration/preflight, image and configuration rollback, private-file cleanup, checksum, scheduled jobs and lock contention.'

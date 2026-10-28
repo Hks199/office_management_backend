@@ -1,6 +1,6 @@
 # EC2 deployment with GitHub Actions
 
-This deploys `sunvika-office-backend` on one Ubuntu 24.04 or 26.04 **amd64/x86_64** EC2 instance using the existing production Docker Compose configuration and host Nginx. The GitHub-hosted runner builds an amd64 Node 24 image; an ARM/Graviton instance needs a separate ARM build workflow. Redis is not used by this application.
+This deploys `sunvika-office-backend` on one Ubuntu 24.04 or 26.04 **amd64/x86_64** EC2 instance using the existing production Docker Compose configuration and host Nginx. The GitHub-hosted runner builds a Node 24 image explicitly for `linux/amd64`; an ARM/Graviton instance needs a separate ARM build workflow. Redis is not used by this application.
 
 `.github/workflows/ci.yml` checks the application, deployment scripts, mocked release/worker behavior and isolated container startup. After **Backend checks** succeeds for a `main` push from this repository, `.github/workflows/deploy.yaml` verifies the checked commit is still the current `main` revision, builds it, packages the image with production Compose, renders the application environment from GitHub secrets/variables, uploads the release, checked deployment helper and private configuration over verified SSH, refreshes the installed helper, and invokes it. You can also start deployment with **Run workflow** on `main`; this requires successful **Backend checks** for a push of that exact current-main commit. Older successful runs, pull requests and unsuccessful checks do not deploy. These files prepare deployment; they do not provision AWS resources or certify the live environment.
 
@@ -40,7 +40,7 @@ The script installs Docker/Compose, Nginx, Certbot and Python, adds the deploy u
 ```text
 /opt/sunvika-office/
   incoming/               # release upload and checksum
-  releases/<release-id>/   # compose.yaml and content-addressed image.id
+  releases/<release-id>/   # Compose, config digest, host image ID and verifier
   current -> releases/...
   previous -> releases/...
   shared/backend.env      # root:<deploy-user-primary-group>, mode 0640
@@ -49,6 +49,10 @@ The script installs Docker/Compose, Nginx, Certbot and Python, adds the deploy u
 Reconnect SSH to activate the Docker group, and check `docker info` and `docker compose version`. Docker-group access is administrative access to this host; use a dedicated trusted deploy key. The deployment helper runs as the deploy user and uses passwordless `sudo` to install the root-owned runtime environment atomically. The deploy user must be allowed to install the checked deployment helper as root and run its `install`/`mv` operations without an interactive password; the standard Ubuntu EC2 `ubuntu` administrator normally has this access.
 
 The one-time host bootstrap is still required. On subsequent GitHub deployments, the workflow uploads `deploy/ec2/deploy.sh` from the checked commit and installs it as root-owned mode 0755 at `/usr/local/bin/sunvika-office-deploy` using `sudo -n install` before transferring application configuration and invoking the helper. You do not need to rerun setup solely to refresh this helper; changes to other installed host services still require the relevant host update.
+
+Each checksummed release archive contains exactly `image.tar`, `image.config.id`, `image_identity.py` and `compose.yaml`. The portable `image.config.id` is the SHA256 of the image's raw configuration JSON, which includes its layer identities. The helper verifies this digest, the release tag and the `linux/amd64` platform before loading the image. It then resolves the loaded image on EC2 and verifies its configuration digest again using a streamed Docker export, without writing another full image archive to disk. Only after that succeeds does it create `image.id` containing the immutable image ID understood by the EC2 Docker daemon.
+
+Docker's classic and containerd image stores can report different IDs for the same image, so the runner's image ID is not assumed to be portable. Production Compose, scheduled jobs and rollback continue to use the verified EC2-local `image.id`; `image.config.id` remains with the release as verification metadata. The verifier travels inside the checked release archive and the workflow refreshes `deploy.sh` automatically, so this fix needs no additional manual helper installation on EC2.
 
 Setup preserves existing environment contents and an existing `/etc/nginx/sites-available/sunvika-office` file, including Certbot changes. It preserves other Nginx sites. The API site accepts only the configured hostname; Ubuntu's default site may still show its welcome page for other hostnames. On a dedicated instance, disable that stock site if desired with `sudo unlink /etc/nginx/sites-enabled/default`, then run `sudo nginx -t && sudo systemctl reload nginx`. Review existing sites first on a shared host.
 
@@ -140,6 +144,8 @@ If EC2 has no `current/image.id`, an empty `releases/` directory and no applicat
 6. Wait for the final verification and a **Deployed** job summary showing the activated release and successful local readiness check. Then reset `RUN_INDEX_MIGRATION=false`.
 
 A green workflow can contain skipped deployment jobs. For an older main commit, a pull request or unsuccessful checks, the eligibility summary explains **Skipped** and no release is deployed. Read the summary and the `package`/`deploy` job statuses rather than relying only on the workflow's green icon. If retrying a failed deployment run, choose **Re-run all jobs**, because release/artifact names include the run attempt and a deploy-only retry can refer to an earlier attempt's package.
+
+If an older deployment passed its upload checksum and then failed with `No such image: sha256:...`, commit and push the image-identity fix to `main`, wait for **Backend checks** on that new commit, and let its automatic deployment finish or use **Run workflow** on the new current `main`. Re-running a workflow for the old commit does not pick up this fix. If the new run itself needs retrying, use **Re-run all jobs** so packaging and deployment share the same attempt. Leave existing failed release files in place while inspecting them; the new commit/run attempt gets a new release directory.
 
 The deploy helper runs compiled `production-indexes.js` with the generated migration configuration, then always runs the read-only `production-preflight.js` with the new runtime identity before activating the release. The runtime identity needs collection/index metadata access for this preflight, alongside its required application permissions. Reset `RUN_INDEX_MIGRATION=false` after the reviewed migration succeeds. A first deployment can create the runtime environment automatically; no application environment upload is needed.
 

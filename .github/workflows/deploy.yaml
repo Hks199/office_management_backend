@@ -95,11 +95,12 @@ jobs:
           [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
           release="${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir release
-          docker build --pull --tag "sunvika-office-api:$release" .
-          docker image inspect --format '{{.Id}}' "sunvika-office-api:$release" > release/image.id
+          docker build --pull --platform linux/amd64 --tag "sunvika-office-api:$release" .
           docker image save --output release/image.tar "sunvika-office-api:$release"
+          cp deploy/ec2/image_identity.py release/image_identity.py
+          python3 deploy/ec2/image_identity.py archive release/image.tar "sunvika-office-api:$release" > release/image.config.id
           cp docker-compose.production.yml release/compose.yaml
-          tar -czf "$release.tar.gz" -C release image.tar image.id compose.yaml
+          tar -czf "$release.tar.gz" -C release image.tar image.config.id image_identity.py compose.yaml
           sha256sum "$release.tar.gz" > "$release.sha256"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
