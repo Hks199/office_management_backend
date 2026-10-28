@@ -78,7 +78,10 @@ async function main() {
     process.stdout.write('Production and isolated smoke Compose configurations validate with synthetic settings.\n');
     return;
   }
-  await run(['info', '--format', '{{.ServerVersion}}'], 'Docker engine preflight');
+  process.stdout.write('Docker engine preflight...\n');
+  const engine = await run(['info', '--format', '{{.ServerVersion}} (kernel {{.KernelVersion}}, {{.OperatingSystem}})'],
+    'Docker engine preflight', true);
+  process.stdout.write(`Docker engine: ${engine}\n`);
   let failed = false;
   let cleanupFailure: Error | undefined;
   try {

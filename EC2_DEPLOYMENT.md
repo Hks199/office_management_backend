@@ -4,6 +4,8 @@ This deploys `sunvika-office-backend` on one Ubuntu 24.04 or 26.04 **amd64/x86_6
 
 `.github/workflows/ci.yml` checks the application, deployment scripts, mocked release/worker behavior and isolated container startup. After **Backend checks** succeeds for a `main` push from this repository, `.github/workflows/deploy.yaml` verifies the checked commit is still the current `main` revision, builds it, packages the image with production Compose, renders the application environment from GitHub secrets/variables, uploads the release, checked deployment helper and private configuration over verified SSH, refreshes the installed helper, and invokes it. You can also start deployment with **Run workflow** on `main`; this requires successful **Backend checks** for a push of that exact current-main commit. Older successful runs, pull requests and unsuccessful checks do not deploy. These files prepare deployment; they do not provision AWS resources or certify the live environment.
 
+The **Backend checks** job temporarily uses the Ubuntu 22.04 runner because MongoDB 8's startup guard rejects the newer kernel on some Ubuntu 24.04 GitHub runners ([upstream runner issue](https://github.com/actions/runner-images/issues/15005)). MongoDB 8 and the full container smoke checks remain enabled. The smoke log records the Docker server's version, kernel and operating system. Deployment jobs and the EC2 operating system are independent of this CI runner selection. Revisit this workaround after the MongoDB image includes the upstream Ubuntu kernel-detection fix.
+
 ## 1. Prepare AWS and DNS
 
 - Create Ubuntu 24.04 or 26.04 amd64 EC2 with sufficient RAM/disk for the API, Docker images and operational jobs. Attach a stable public address and point your API DNS hostname to it.

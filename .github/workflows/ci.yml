@@ -6,7 +6,9 @@ permissions:
   contents: read
 jobs:
   verify:
-    runs-on: ubuntu-24.04
+    # Temporary MongoDB 8 kernel-compatibility workaround; keep the full smoke test.
+    # https://github.com/actions/runner-images/issues/15005
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
