@@ -6,7 +6,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
