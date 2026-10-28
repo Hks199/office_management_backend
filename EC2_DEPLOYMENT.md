@@ -2,7 +2,7 @@
 
 This deploys `sunvika-office-backend` on one Ubuntu 24.04 or 26.04 **amd64/x86_64** EC2 instance using the existing production Docker Compose configuration and host Nginx. The GitHub-hosted runner builds an amd64 Node 24 image; an ARM/Graviton instance needs a separate ARM build workflow. Redis is not used by this application.
 
-`.github/workflows/ci.yml` checks the application, deployment scripts, mocked release/worker behavior and isolated container startup. After **Backend checks** succeeds for a `main` push from this repository, `.github/workflows/deploy.yaml` verifies the checked commit is still the current `main` revision, builds it, packages the image with production Compose, uploads it over verified SSH and invokes the installed deploy helper. Older successful runs, pull requests and unsuccessful checks do not deploy. These files prepare deployment; they do not provision AWS resources or certify the live environment.
+`.github/workflows/ci.yml` checks the application, deployment scripts, mocked release/worker behavior and isolated container startup. After **Backend checks** succeeds for a `main` push from this repository, `.github/workflows/deploy.yaml` verifies the checked commit is still the current `main` revision, builds it, packages the image with production Compose, renders the application environment from GitHub secrets/variables, uploads the release, checked deployment helper and private configuration over verified SSH, refreshes the installed helper, and invokes it. Older successful runs, pull requests and unsuccessful checks do not deploy. These files prepare deployment; they do not provision AWS resources or certify the live environment.
 
 ## 1. Prepare AWS and DNS
 
@@ -24,7 +24,15 @@ ssh -i "C:\keys\ec2.pem" ubuntu@YOUR_EC2_IP
 On EC2:
 
 ```sh
-sudo bash /tmp/sunvika-office-ec2/setup.sh api.example.com ubuntu
+sudo bash /tmp/sunvika-office-ec2/setup.sh sunvika.niakylie.com ubuntu
+```
+
+If the repository is already cloned on EC2, update and run its setup script instead:
+
+```sh
+cd ~/office_management_backend
+git pull --ff-only origin main
+sudo bash deploy/ec2/setup.sh sunvika.niakylie.com ubuntu
 ```
 
 The script installs Docker/Compose, Nginx, Certbot and Python, adds the deploy user to the Docker group, installs `/usr/local/bin/sunvika-office-deploy`, enables certificate renewal and the queue timer, and creates:
@@ -36,32 +44,47 @@ The script installs Docker/Compose, Nginx, Certbot and Python, adds the deploy u
   current -> releases/...
   previous -> releases/...
   shared/backend.env      # root:<deploy-user-primary-group>, mode 0640
-  shared/migrate.env      # optional separate migration identity
 ```
 
-Reconnect SSH to activate the Docker group, and check `docker info` and `docker compose version`. Docker-group access is administrative access to this host; use a dedicated trusted deploy key. The deployment helper runs as the deploy user without sudo.
+Reconnect SSH to activate the Docker group, and check `docker info` and `docker compose version`. Docker-group access is administrative access to this host; use a dedicated trusted deploy key. The deployment helper runs as the deploy user and uses passwordless `sudo` to install the root-owned runtime environment atomically. The deploy user must be allowed to install the checked deployment helper as root and run its `install`/`mv` operations without an interactive password; the standard Ubuntu EC2 `ubuntu` administrator normally has this access.
+
+The one-time host bootstrap is still required. On subsequent GitHub deployments, the workflow uploads `deploy/ec2/deploy.sh` from the checked commit and installs it as root-owned mode 0755 at `/usr/local/bin/sunvika-office-deploy` using `sudo -n install` before transferring application configuration and invoking the helper. You do not need to rerun setup solely to refresh this helper; changes to other installed host services still require the relevant host update.
 
 Setup preserves existing environment contents and an existing `/etc/nginx/sites-available/sunvika-office` file, including Certbot changes. It preserves other Nginx sites. The API site accepts only the configured hostname; Ubuntu's default site may still show its welcome page for other hostnames. On a dedicated instance, disable that stock site if desired with `sudo unlink /etc/nginx/sites-enabled/default`, then run `sudo nginx -t && sudo systemctl reload nginx`. Review existing sites first on a shared host.
 
-## 3. Configure production settings and HTTPS
+## 3. Configure production settings in GitHub
 
-```sh
-sudoedit /opt/sunvika-office/shared/backend.env
-```
+Application settings come from the GitHub secrets and variables you already configured. **Do not manually upload a local `.env` or edit the EC2 runtime file for this workflow.** Create/use the **production** GitHub environment under repository **Settings > Environments**, or use repository-level **Settings > Secrets and variables > Actions**. The deployment job uses the `production` environment; its values take precedence over matching repository values.
 
-Use [deploy/ec2/backend.env.example](deploy/ec2/backend.env.example) as the checklist. Required values are the authenticated TLS `MONGODB_URI`, independent `JWT_SECRET` and `TOKEN_ENCRYPTION_KEY`, exact HTTPS `CORS_ORIGINS`, a matching `CREDENTIAL_UI_ORIGIN`, `AWS_REGION` and `S3_BUCKET`. Configure SMTP to send invitations/resets. Generate signing and encryption values independently in your private terminal:
+For each application setting, the workflow reads a nonempty GitHub **secret first**, then a **variable with the same name**, then its documented optional default. Configure these seven required names with real production values:
+
+| Name | Recommended location | Purpose |
+|---|---|---|
+| `MONGODB_URI` | Secret | Authenticated TLS MongoDB URI for the runtime database identity |
+| `JWT_SECRET` | Secret | Independent signing secret |
+| `TOKEN_ENCRYPTION_KEY` | Secret | Independent 64-character hexadecimal encryption key |
+| `CORS_ORIGINS` | Variable | Exact HTTPS frontend origin(s) |
+| `CREDENTIAL_UI_ORIGIN` | Variable | HTTPS frontend origin used for invitation/reset links |
+| `AWS_REGION` | Variable | Region of the configured S3 bucket |
+| `S3_BUCKET` | Variable | Private versioned S3 bucket name |
+
+Keep credentials and signing/encryption keys in **Secrets**. Keep ordinary settings in **Variables**. Do not paste their real values into workflow YAML, logs or committed files. Generate signing and encryption values independently if they are not already configured:
 
 ```sh
 python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
 python3 -c 'import secrets; print(secrets.token_hex(32))'
 ```
 
-Compose reads this file as environment interpolation, not a shell script. Single-quote values containing `$` or `#`; percent-encode special characters in MongoDB URI credentials. Do not print expanded Compose configuration or upload this file to GitHub. The production Compose file enforces `NODE_ENV=production`, `DOCS_ENABLED=false` and `RATE_LIMIT_STORE=mongo`. Keep `TRUST_PROXY_HOPS=1` for this direct host-Nginx topology; adjust trust deliberately if adding a load balancer.
+Other names listed in [deploy/ec2/backend.env.example](deploy/ec2/backend.env.example) are optional GitHub secrets/variables with defaults: proxy trust, log/rate-limit/database tuning, body/shutdown limits, JWT issuer/audience and lifetimes, commercial-job scheduling, credential-delivery interval and SMTP settings. The GitHub workflow and host template default `CREDENTIAL_DELIVERY_ENABLED=false` so email is not sent before frontend/SMTP setup. Configure `SMTP_PASSWORD` and other credentials as Secrets. Keep `TRUST_PROXY_HOPS=1` for this direct host-Nginx topology; adjust trust deliberately if adding a load balancer.
 
-After DNS resolves to EC2 and ports 80/443 are reachable:
+If your frontend is not ready, use temporary `CORS_ORIGINS=https://sunvika.niakylie.com` and `CREDENTIAL_UI_ORIGIN=https://sunvika.niakylie.com`, and leave `CREDENTIAL_DELIVERY_ENABLED=false`. Replace both origins with the actual frontend HTTPS address and configure SMTP before enabling invitations/resets. Production cookies use `SameSite=Strict`, so frontend/API must share the same site or origin.
+
+The workflow writes a private mode-0600 interpolation file, transfers it over SSH, and the deploy helper installs it as `/opt/sunvika-office/shared/backend.env` with root ownership and mode 0640 under the deployment lock. Values are quoted for Compose without printing them. The production Compose file enforces `NODE_ENV=production`, `DOCS_ENABLED=false` and `RATE_LIMIT_STORE=mongo`; other arbitrary GitHub values are not forwarded. Use an EC2 instance role for AWS credentials rather than expecting static AWS access keys to be forwarded.
+
+After DNS resolves to EC2 and ports 80/443 are reachable, configure HTTPS:
 
 ```sh
-sudo certbot --nginx --redirect -d api.example.com
+sudo certbot --nginx --redirect -d sunvika.niakylie.com
 sudo certbot renew --dry-run
 ```
 
@@ -69,7 +92,7 @@ Nginx overwrites forwarding headers, proxies to loopback port 3000, bounds conne
 
 ## 4. Set GitHub deployment configuration
 
-Create a GitHub environment named **production** and add its secrets:
+In the **production** GitHub environment (or repository Actions secrets), keep these SSH secrets configured:
 
 | Secret | Value |
 |---|---|
@@ -97,29 +120,26 @@ Add these environment variables as needed:
 |---|---|
 | `EC2_USER` | `ubuntu`; must match the setup deploy user |
 | `EC2_SSH_PORT` | `22` |
-| `RUN_INDEX_MIGRATION` | `false`; explicitly set `true` only for a reviewed index migration |
+| `RUN_INDEX_MIGRATION` | `false`; set `true` for the initial collection/index creation or a reviewed index migration |
 
 Restrict the production environment to the intended production branch and configure environment reviewers if your release process requires them. The workflow is configured for `main`; update its branch filter and deployment condition together if your default/release branch differs.
 
 ## 5. First release and migrations
 
-Production disables automatic collection/index creation. Before the initial deployment, create a separate migration configuration with the same application settings but a database identity that can create the required collections/indexes:
+Production disables automatic collection/index creation. For the initial deployment, set `RUN_INDEX_MIGRATION=true` in GitHub's production environment. Optionally add **`MIGRATION_MONGODB_URI`** as a GitHub Secret for a separate database identity permitted to create collections/indexes in the same database. If it is absent, migration uses `MONGODB_URI`, whose identity must then have those permissions. Migration receives the same application settings as the new runtime configuration with only this URI overridden; it does not reuse a stale host `migrate.env`. Its private staging file is removed after deployment.
 
-```sh
-sudo cp /opt/sunvika-office/shared/backend.env /opt/sunvika-office/shared/migrate.env
-sudo chown "root:$(id -gn)" /opt/sunvika-office/shared/migrate.env
-sudo chmod 0640 /opt/sunvika-office/shared/migrate.env
-sudoedit /opt/sunvika-office/shared/migrate.env
-```
+Push the prepared code to `main`. If the current `main` commit is already pushed, open **Actions > Backend checks > the latest current-main push run > Re-run all jobs**. Wait for **Backend checks**, then separately for **Deploy office backend to EC2**, to succeed. There is no manual **Run workflow** button: deployment is triggered by the successful eligible checks. If retrying the deployment workflow, choose **Re-run all jobs**, because release/artifact names include the run attempt and a deploy-only retry can refer to an earlier attempt's package.
 
-Set `RUN_INDEX_MIGRATION=true` in GitHub's production environment, push the prepared code to `main`, and monitor both workflows. The deploy helper runs compiled `production-indexes.js` with `migrate.env`, then always runs the read-only `production-preflight.js` with the normal runtime identity before switching the API. The runtime identity needs collection/index metadata access for this preflight, alongside its required application permissions. Reset `RUN_INDEX_MIGRATION=false` after the reviewed migration succeeds.
+The deploy helper runs compiled `production-indexes.js` with the generated migration configuration, then always runs the read-only `production-preflight.js` with the new runtime identity before activating the release. The runtime identity needs collection/index metadata access for this preflight, alongside its required application permissions. Reset `RUN_INDEX_MIGRATION=false` after the reviewed migration succeeds. A first deployment can create the runtime environment automatically; no application environment upload is needed.
+
+The helper still supports the optional host-managed mode when invoked manually without the GitHub-managed third argument. That mode reads the existing protected host configuration, including `shared/migrate.env` when a migration is requested; it is not the normal GitHub workflow path.
 
 The production index migration is additive. It does **not** seed grants/defaults, approve creation policies, initialize the MD account or perform earlier data migrations. Follow [ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md), [DEPLOYMENT.md](DEPLOYMENT.md) and [PHASE9.md](PHASE9.md) for fresh bootstrap or upgrades from older phases. Run the compiled operational scripts with separately injected operational configuration; `tsx` is absent from the production image. Do not bootstrap a second MD or automatically rerun bootstrap during releases.
 
 Readiness is `/api/v1/health/ready` and liveness is `/api/v1/health/live`. Verify HTTPS readiness and an authorized business operation after the release:
 
 ```sh
-curl --fail https://api.example.com/api/v1/health/ready
+curl --fail https://sunvika.niakylie.com/api/v1/health/ready
 ```
 
 ## 6. Operations, workers and rollback
@@ -133,7 +153,7 @@ docker compose --project-name sunvika-office --env-file shared/backend.env --fil
 docker compose --project-name sunvika-office --env-file shared/backend.env --file current/compose.yaml logs --tail 100 api
 ```
 
-Invitations/resets run in the API automatically when SMTP is configured. Setup installs `run-jobs.sh` as `/usr/local/bin/sunvika-office-jobs` and enables `sunvika-office-jobs.timer`. It starts two minutes after boot, then processes bounded commercial/import/export and dashboard batches 60 seconds after the previous run finishes. The wrapper resolves one release and image for both queues, shares the deployment lock, and skips an interval when deployment is active or the first release has not started. A commercial queue failure still allows the dashboard batch to run and marks the service failed for monitoring.
+Invitations/resets run in the API automatically when SMTP is configured and `CREDENTIAL_DELIVERY_ENABLED=true`. Setup installs `run-jobs.sh` as `/usr/local/bin/sunvika-office-jobs` and enables `sunvika-office-jobs.timer`. It starts two minutes after boot, then processes bounded commercial/import/export and dashboard batches 60 seconds after the previous run finishes. The wrapper resolves one release and image for both queues, shares the deployment lock, and skips an interval when deployment is active or the first release has not started. A commercial queue failure still allows the dashboard batch to run and marks the service failed for monitoring.
 
 ```sh
 systemctl status sunvika-office-jobs.timer
@@ -144,12 +164,12 @@ sudo systemctl start sunvika-office-jobs.service
 sudo systemctl enable --now sunvika-office-jobs.timer
 ```
 
-The service has a four-minute deadline and does not overlap its own runs. The commercial command runs at most five import/export iterations, and the dashboard command handles at most five export attempts; monitor backlog, runtime, failure counts and scheduler heartbeat and tune frequency from measurements. Commercial jobs stay disabled inside the API so the timer owns their scheduling.
+The service has a four-minute deadline and does not overlap its own runs. The commercial command runs at most five import/export iterations, and the dashboard command handles at most five export attempts; monitor backlog, runtime, failure counts and scheduler heartbeat and tune frequency from measurements. Keep `COMMERCIAL_JOBS_ENABLED=false` inside the API so the timer owns their scheduling; `COMMERCIAL_JOBS_INTERVAL_MS` is forwarded as an optional application setting if you deliberately choose a different scheduling arrangement.
 
 Schedule compiled `cleanup-orphan-photos.js` hourly with a **separate** protected configuration and cleanup IAM role; the normal API identity must not gain broad delete access. If using an isolated credential-delivery schedule, set `CREDENTIAL_DELIVERY_ENABLED=false` in the API and pass SMTP/key settings only to that worker. Lease recovery/retries survive restarts, but require monitoring. See [DEPLOYMENT.md](DEPLOYMENT.md) for each worker's permissions and retention rules.
 
 The helper serializes releases with `flock`. Release IDs contain the commit SHA, workflow run ID and attempt. It validates the archive/checksum, loads the image, pins Compose to the local `sha256` image ID, runs migration/preflight as configured, then waits for container health and checks readiness. A failed activation restores the prior release when one exists; an unsuccessful first deployment stops the API. A single API container means brief downtime during replacement; this is not a rolling deployment. A host/process crash can require manual recovery.
 
-Automatic rollback changes the application image only and uses the current production configuration. Additive indexes, histories, data and external effects remain. Review authorization/configuration compatibility before manually restoring an older image. Preserve `current` and `previous` releases and their Docker image IDs when cleaning disk; do not prune rollback images indiscriminately. Failed release metadata may need operator cleanup after inspection.
+For GitHub-managed deployments, activation installs the new runtime configuration atomically under the deployment lock. If activation fails, automatic rollback restores the previous runtime configuration together with the previous application release; a failed first deployment restores the prior configuration state. Additive indexes, histories, data and external effects remain. Review authorization/configuration compatibility before manually restoring an older image. Preserve `current` and `previous` releases and their Docker image IDs when cleaning disk; do not prune rollback images indiscriminately. Failed release metadata may need operator cleanup after inspection.
 
 Before live business use, complete the target-environment acceptance in [PHASE9.md](PHASE9.md): image vulnerability scan/SBOM, TLS and cookies, Atlas permissions/backups/restore, actual S3/browser CORS and version checks, SMTP delivery, worker scheduling, load/capacity and real shutdown/rollback. Local configuration checks cannot establish those results.

@@ -23,6 +23,7 @@ jobs:
         run: |
           shellcheck deploy/ec2/*.sh
           bash deploy/ec2/test-deploy.sh
+          python3 -B -m unittest discover -s deploy/ec2 -p 'test_*.py'
       - run: npm run check:release
       - run: npm audit
       - run: docker compose config --quiet

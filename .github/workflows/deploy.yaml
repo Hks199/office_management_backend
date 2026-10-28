@@ -92,16 +92,61 @@ jobs:
       EC2_SSH_PORT: ${{ vars.EC2_SSH_PORT || '22' }}
       RUN_INDEX_MIGRATION: ${{ vars.RUN_INDEX_MIGRATION || 'false' }}
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: ec2-release
+      - name: Prepare private environment from GitHub secrets and variables
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI || vars.MONGODB_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET || vars.JWT_SECRET }}
+          TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY || vars.TOKEN_ENCRYPTION_KEY }}
+          CORS_ORIGINS: ${{ secrets.CORS_ORIGINS || vars.CORS_ORIGINS }}
+          CREDENTIAL_UI_ORIGIN: ${{ secrets.CREDENTIAL_UI_ORIGIN || vars.CREDENTIAL_UI_ORIGIN }}
+          AWS_REGION: ${{ secrets.AWS_REGION || vars.AWS_REGION }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET || vars.S3_BUCKET }}
+          TRUST_PROXY_HOPS: ${{ secrets.TRUST_PROXY_HOPS || vars.TRUST_PROXY_HOPS }}
+          LOG_LEVEL: ${{ secrets.LOG_LEVEL || vars.LOG_LEVEL }}
+          RATE_LIMIT_MAX: ${{ secrets.RATE_LIMIT_MAX || vars.RATE_LIMIT_MAX }}
+          RATE_LIMIT_WINDOW_MS: ${{ secrets.RATE_LIMIT_WINDOW_MS || vars.RATE_LIMIT_WINDOW_MS }}
+          MONGODB_MAX_POOL_SIZE: ${{ secrets.MONGODB_MAX_POOL_SIZE || vars.MONGODB_MAX_POOL_SIZE }}
+          MONGODB_SERVER_SELECTION_TIMEOUT_MS: ${{ secrets.MONGODB_SERVER_SELECTION_TIMEOUT_MS || vars.MONGODB_SERVER_SELECTION_TIMEOUT_MS }}
+          MONGODB_WAIT_QUEUE_TIMEOUT_MS: ${{ secrets.MONGODB_WAIT_QUEUE_TIMEOUT_MS || vars.MONGODB_WAIT_QUEUE_TIMEOUT_MS }}
+          SLOW_QUERY_MS: ${{ secrets.SLOW_QUERY_MS || vars.SLOW_QUERY_MS }}
+          BODY_LIMIT_BYTES: ${{ secrets.BODY_LIMIT_BYTES || vars.BODY_LIMIT_BYTES }}
+          SHUTDOWN_TIMEOUT_MS: ${{ secrets.SHUTDOWN_TIMEOUT_MS || vars.SHUTDOWN_TIMEOUT_MS }}
+          JWT_ISSUER: ${{ secrets.JWT_ISSUER || vars.JWT_ISSUER }}
+          JWT_AUDIENCE: ${{ secrets.JWT_AUDIENCE || vars.JWT_AUDIENCE }}
+          ACCESS_TTL_SECONDS: ${{ secrets.ACCESS_TTL_SECONDS || vars.ACCESS_TTL_SECONDS }}
+          REFRESH_TTL_DAYS: ${{ secrets.REFRESH_TTL_DAYS || vars.REFRESH_TTL_DAYS }}
+          REFRESH_ABSOLUTE_DAYS: ${{ secrets.REFRESH_ABSOLUTE_DAYS || vars.REFRESH_ABSOLUTE_DAYS }}
+          CREDENTIAL_DELIVERY_ENABLED: ${{ secrets.CREDENTIAL_DELIVERY_ENABLED || vars.CREDENTIAL_DELIVERY_ENABLED }}
+          CREDENTIAL_DELIVERY_INTERVAL_MS: ${{ secrets.CREDENTIAL_DELIVERY_INTERVAL_MS || vars.CREDENTIAL_DELIVERY_INTERVAL_MS }}
+          COMMERCIAL_JOBS_ENABLED: ${{ secrets.COMMERCIAL_JOBS_ENABLED || vars.COMMERCIAL_JOBS_ENABLED }}
+          COMMERCIAL_JOBS_INTERVAL_MS: ${{ secrets.COMMERCIAL_JOBS_INTERVAL_MS || vars.COMMERCIAL_JOBS_INTERVAL_MS }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST || vars.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || vars.SMTP_PORT }}
+          SMTP_SECURE: ${{ secrets.SMTP_SECURE || vars.SMTP_SECURE }}
+          SMTP_USER: ${{ secrets.SMTP_USER || vars.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD || vars.SMTP_PASSWORD }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM || vars.MAIL_FROM }}
+          MIGRATION_MONGODB_URI: ${{ secrets.MIGRATION_MONGODB_URI || vars.MIGRATION_MONGODB_URI }}
+        shell: bash
+        run: python3 deploy/ec2/render_env.py --output-dir "$RUNNER_TEMP/office_ec2_config"
       - name: Configure verified SSH connection
+        id: ssh
         shell: bash
         run: |
           set -euo pipefail
           [[ "$EC2_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || { echo 'Invalid EC2_HOST'; exit 1; }
           [[ "$EC2_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo 'Invalid EC2_USER'; exit 1; }
-          [[ "$EC2_SSH_PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$EC2_SSH_PORT >= 1 && 10#$EC2_SSH_PORT <= 65535 )) || { echo 'Invalid EC2_SSH_PORT'; exit 1; }
+          if [[ ! "$EC2_SSH_PORT" =~ ^[0-9]{1,5}$ ]] || (( 10#$EC2_SSH_PORT < 1 || 10#$EC2_SSH_PORT > 65535 )); then
+            echo 'Invalid EC2_SSH_PORT'
+            exit 1
+          fi
           [[ "$RUN_INDEX_MIGRATION" == true || "$RUN_INDEX_MIGRATION" == false ]]
           [[ -n "$EC2_SSH_KEY" && -n "$EC2_KNOWN_HOSTS" ]] || { echo 'Missing SSH secrets'; exit 1; }
           umask 077
@@ -130,8 +175,32 @@ jobs:
           release="${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           sha256sum --check "$release.sha256"
           scp "$release.tar.gz" "$release.sha256" office-ec2:/opt/sunvika-office/incoming/
-          ssh office-ec2 "/usr/local/bin/sunvika-office-deploy '$release' '$RUN_INDEX_MIGRATION'"
-      - name: Remove SSH material
+          scp deploy/ec2/deploy.sh "office-ec2:/opt/sunvika-office/incoming/$release-deploy.sh"
+          # The release identifier is validated locally before expansion.
+          # shellcheck disable=SC2029
+          ssh office-ec2 "sudo -n install -o root -g root -m 0755 '/opt/sunvika-office/incoming/$release-deploy.sh' /usr/local/bin/sunvika-office-deploy && rm -f '/opt/sunvika-office/incoming/$release-deploy.sh'"
+          # The release identifier is validated locally before expansion.
+          # shellcheck disable=SC2029
+          ssh office-ec2 "umask 077; mkdir -m 0700 '/opt/sunvika-office/incoming/$release-config'"
+          env_files=("$RUNNER_TEMP/office_ec2_config/backend.env")
+          if [[ "$RUN_INDEX_MIGRATION" == true ]]; then
+            env_files+=("$RUNNER_TEMP/office_ec2_config/migrate.env")
+          fi
+          scp "${env_files[@]}" "office-ec2:/opt/sunvika-office/incoming/$release-config/"
+          # The release identifier is validated locally before expansion.
+          # shellcheck disable=SC2029
+          ssh office-ec2 "/usr/local/bin/sunvika-office-deploy '$release' '$RUN_INDEX_MIGRATION' github"
+      - name: Remove remote staged environment
+        if: always() && steps.ssh.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          release="${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # The release identifier is validated locally before expansion.
+          # shellcheck disable=SC2029
+          ssh office-ec2 "rm -f '/opt/sunvika-office/incoming/$release-deploy.sh' '/opt/sunvika-office/incoming/$release-config/backend.env' '/opt/sunvika-office/incoming/$release-config/migrate.env'; if [ -d '/opt/sunvika-office/incoming/$release-config' ]; then rmdir '/opt/sunvika-office/incoming/$release-config'; fi"
+      - name: Remove local environment and SSH material
         if: always()
         shell: bash
-        run: rm -f "$RUNNER_TEMP/office_ec2_key" "$RUNNER_TEMP/office_ec2_known_hosts" ~/.ssh/config
+        run: rm -f "$RUNNER_TEMP/office_ec2_config/backend.env" "$RUNNER_TEMP/office_ec2_config/migrate.env" "$RUNNER_TEMP/office_ec2_key" "$RUNNER_TEMP/office_ec2_known_hosts" ~/.ssh/config
