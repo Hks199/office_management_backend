@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ubuntu 24.04 amd64 bootstrap; application secrets and first migration are explicit steps.
+# Ubuntu 24.04/26.04 amd64 bootstrap; application secrets and first migration are explicit steps.
 set -Eeuo pipefail
 
 fail() { printf 'Setup failed: %s\n' "$*" >&2; exit 1; }
@@ -13,7 +13,7 @@ id "$deploy_user" >/dev/null 2>&1 || fail 'deploy user must already exist'
 deploy_group="$(id -gn "$deploy_user")"
 # shellcheck disable=SC1091
 source /etc/os-release
-[[ "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]] || fail 'this setup supports Ubuntu 24.04'
+[[ "$ID" == ubuntu && ( "$VERSION_ID" == 24.04 || "$VERSION_ID" == 26.04 ) ]] || fail "this setup supports Ubuntu 24.04 or 26.04; detected $ID $VERSION_ID"
 [[ "$(dpkg --print-architecture)" == amd64 ]] || fail 'the workflow image requires an amd64/x86_64 EC2 instance'
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 for source_file in deploy.sh run-jobs.sh sunvika-office-jobs.service sunvika-office-jobs.timer nginx.conf backend.env.example; do

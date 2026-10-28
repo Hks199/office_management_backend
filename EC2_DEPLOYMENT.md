@@ -1,12 +1,12 @@
 # EC2 deployment with GitHub Actions
 
-This deploys `sunvika-office-backend` on one Ubuntu 24.04 **amd64/x86_64** EC2 instance using the existing production Docker Compose configuration and host Nginx. The GitHub-hosted runner builds an amd64 Node 24 image; an ARM/Graviton instance needs a separate ARM build workflow. Redis is not used by this application.
+This deploys `sunvika-office-backend` on one Ubuntu 24.04 or 26.04 **amd64/x86_64** EC2 instance using the existing production Docker Compose configuration and host Nginx. The GitHub-hosted runner builds an amd64 Node 24 image; an ARM/Graviton instance needs a separate ARM build workflow. Redis is not used by this application.
 
 `.github/workflows/ci.yml` checks the application, deployment scripts, mocked release/worker behavior and isolated container startup. After **Backend checks** succeeds for a `main` push from this repository, `.github/workflows/deploy.yaml` verifies the checked commit is still the current `main` revision, builds it, packages the image with production Compose, uploads it over verified SSH and invokes the installed deploy helper. Older successful runs, pull requests and unsuccessful checks do not deploy. These files prepare deployment; they do not provision AWS resources or certify the live environment.
 
 ## 1. Prepare AWS and DNS
 
-- Create Ubuntu 24.04 amd64 EC2 with sufficient RAM/disk for the API, Docker images and operational jobs. Attach a stable public address and point your API DNS hostname to it.
+- Create Ubuntu 24.04 or 26.04 amd64 EC2 with sufficient RAM/disk for the API, Docker images and operational jobs. Attach a stable public address and point your API DNS hostname to it.
 - Allow inbound 80/443 and SSH from your administrator/runner network. Keep port 3000 closed externally; Compose publishes it only on `127.0.0.1`. GitHub-hosted runner egress addresses can change, so plan SSH connectivity or use a runner on your private network.
 - Allow the instance's **outbound public IP** in MongoDB Atlas. Configure an authenticated TLS, transaction-capable replica set, backups and a restricted runtime database identity.
 - Provision the versioned private S3 bucket and runtime IAM permissions described in [DEPLOYMENT.md](DEPLOYMENT.md) and [infra/SUNVIKA_S3_SETUP.md](infra/SUNVIKA_S3_SETUP.md). Prefer an EC2 instance role. For role credentials from bridged Docker containers, require IMDSv2 and configure metadata response hop limit **2**, then verify access from the container. Cleanup needs its own restricted version-delete role.
