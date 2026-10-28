@@ -1,10 +1,12 @@
 # Deployment and operations
 
+The prepared GitHub Actions → EC2 pipeline is documented in [EC2_DEPLOYMENT.md](EC2_DEPLOYMENT.md), with Nginx, Ubuntu setup, scheduled queues, protected runtime configuration and rollback. Successful `Backend checks` runs for `main` pushes trigger `.github/workflows/deploy.yaml`.
+
 Phases 1-9 provide the business APIs and production-readiness tooling. Version 0.9.0 rollout requires the additive production migration, read-only preflight, shared quotas and target-environment acceptance documented in PHASE9.md.
 
 ## Development containers
 
-For 0.9.0, follow PHASE9.md: migrate with db:indexes:production, inspect with ops:preflight, use shared MongoDB quotas and the independent docker-compose.production.yml. npm run validate:production-compose checks synthetic configuration; npm run test:container needs a running Linux Docker engine and exercises an isolated project. The CI workflow runs checks/coverage/audit/container smoke and retains coverage artifacts. No image publication or production deployment occurs automatically. Monitoring is GET /api/v1/operations/metrics with live settings:manage ALL. A bounded test:load command supports authorized read-only staging measurements.
+For 0.9.0, follow PHASE9.md: migrate with db:indexes:production, inspect with ops:preflight, use shared MongoDB quotas and the independent docker-compose.production.yml. npm run validate:production-compose checks synthetic configuration; npm run test:container needs a running Linux Docker engine and exercises an isolated project. CI runs checks/coverage/audit/container smoke and retains coverage artifacts. Successful checks on a main push trigger the configured EC2 deployment; see EC2_DEPLOYMENT.md for its required server and GitHub configuration. Monitoring is GET /api/v1/operations/metrics with live settings:manage ALL. A bounded test:load command supports authorized read-only staging measurements.
 
 Populate JWT_SECRET and TOKEN_ENCRYPTION_KEY in .env before starting the API; Compose passes them into the container without insecure defaults.
 
@@ -21,7 +23,7 @@ docker compose down
 
 Multi-stage Dockerfile builds TypeScript with `npm ci`, installs production-only dependencies in runtime, and runs as non-root `node`. Source/tests/.env are excluded from runtime. Use `docker build -t sunvika-api:<release> .` and inject secrets through the deployment environment. Set NODE_ENV=production, DOCS_ENABLED=false, authenticated TLS MONGODB_URI, HTTPS CORS_ORIGINS, and a trusted ingress configuration. Expose port 3000 only behind that ingress. Set termination grace >= SHUTDOWN_TIMEOUT_MS + ingress draining time (recommended 20 seconds for the default 10-second application deadline).
 
-CI checks lint, typechecking, tests, build, dependency audit and image build. Deployment tooling must pin approved image digests, scan the final image, create an SBOM, and refresh security patches. No registry publishing or deployment is performed by this repository's initial workflow.
+CI checks lint, typechecking, tests, build, dependency audit and image build. The EC2 workflow packages the runtime image and pins deployment to its content-addressed image ID, without requiring a registry. Scan the final image, create an SBOM, and refresh security patches as part of production acceptance.
 
 ## Health and shutdown
 

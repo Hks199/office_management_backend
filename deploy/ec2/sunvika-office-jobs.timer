@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Sunvika office queue processing
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=sunvika-office-jobs.service
+
+[Install]
+WantedBy=timers.target

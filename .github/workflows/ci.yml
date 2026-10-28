@@ -6,19 +6,28 @@ permissions:
   contents: read
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
           cache: npm
       - run: npm ci
+        env:
+          MONGOMS_DISABLE_POSTINSTALL: '1'
+      - name: Validate EC2 deployment scripts
+        run: |
+          shellcheck deploy/ec2/*.sh
+          bash deploy/ec2/test-deploy.sh
       - run: npm run check:release
       - run: npm audit
       - run: docker compose config --quiet
       - run: npm run test:container
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
           name: coverage

@@ -1,0 +1,137 @@
+name: Deploy office backend to EC2
+
+on:
+  workflow_run:
+    workflows: [Backend checks]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sunvika-office-production-${{ github.event.workflow_run.conclusion }}-${{ github.event.workflow_run.event }}-${{ github.event.workflow_run.head_repository.full_name }}
+  cancel-in-progress: false
+
+jobs:
+  eligible:
+    # Never promote a PR build or code from another repository.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      promote: ${{ steps.current.outputs.promote }}
+    steps:
+      - name: Skip successful checks for an older main revision
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          current_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$current_sha" == "$SOURCE_SHA" ]]; then
+            echo 'promote=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'promote=false' >> "$GITHUB_OUTPUT"
+            echo 'A newer main revision exists; skipping this deployment.'
+          fi
+
+  package:
+    needs: eligible
+    if: needs.eligible.outputs.promote == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Build and package the checked commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          release="${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir release
+          docker build --pull --tag "sunvika-office-api:$release" .
+          docker image inspect --format '{{.Id}}' "sunvika-office-api:$release" > release/image.id
+          docker image save --output release/image.tar "sunvika-office-api:$release"
+          cp docker-compose.production.yml release/compose.yaml
+          tar -czf "$release.tar.gz" -C release image.tar image.id compose.yaml
+          sha256sum "$release.tar.gz" > "$release.sha256"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ec2-release
+          path: |
+            *.tar.gz
+            *.sha256
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
+  deploy:
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: production
+    env:
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+      EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+      EC2_USER: ${{ vars.EC2_USER || 'ubuntu' }}
+      EC2_SSH_PORT: ${{ vars.EC2_SSH_PORT || '22' }}
+      RUN_INDEX_MIGRATION: ${{ vars.RUN_INDEX_MIGRATION || 'false' }}
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: ec2-release
+      - name: Configure verified SSH connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EC2_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || { echo 'Invalid EC2_HOST'; exit 1; }
+          [[ "$EC2_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo 'Invalid EC2_USER'; exit 1; }
+          [[ "$EC2_SSH_PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$EC2_SSH_PORT >= 1 && 10#$EC2_SSH_PORT <= 65535 )) || { echo 'Invalid EC2_SSH_PORT'; exit 1; }
+          [[ "$RUN_INDEX_MIGRATION" == true || "$RUN_INDEX_MIGRATION" == false ]]
+          [[ -n "$EC2_SSH_KEY" && -n "$EC2_KNOWN_HOSTS" ]] || { echo 'Missing SSH secrets'; exit 1; }
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > "$RUNNER_TEMP/office_ec2_key"
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > "$RUNNER_TEMP/office_ec2_known_hosts"
+          cat > ~/.ssh/config <<EOF
+          Host office-ec2
+            HostName $EC2_HOST
+            User $EC2_USER
+            Port $EC2_SSH_PORT
+            IdentityFile $RUNNER_TEMP/office_ec2_key
+            UserKnownHostsFile $RUNNER_TEMP/office_ec2_known_hosts
+            StrictHostKeyChecking yes
+            IdentitiesOnly yes
+            BatchMode yes
+            ConnectTimeout 15
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
+          EOF
+      - name: Upload and deploy release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          release="${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sha256sum --check "$release.sha256"
+          scp "$release.tar.gz" "$release.sha256" office-ec2:/opt/sunvika-office/incoming/
+          ssh office-ec2 "/usr/local/bin/sunvika-office-deploy '$release' '$RUN_INDEX_MIGRATION'"
+      - name: Remove SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/office_ec2_key" "$RUNNER_TEMP/office_ec2_known_hosts" ~/.ssh/config

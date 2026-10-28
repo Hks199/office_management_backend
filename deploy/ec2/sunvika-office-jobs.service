@@ -1,0 +1,21 @@
+[Unit]
+Description=Process Sunvika office commercial and dashboard queues
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__DEPLOY_USER__
+Group=__DEPLOY_GROUP__
+SupplementaryGroups=docker
+WorkingDirectory=/opt/sunvika-office
+ExecStart=/usr/local/bin/sunvika-office-jobs
+TimeoutStartSec=240s
+TimeoutStopSec=30s
+KillSignal=SIGINT
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=full

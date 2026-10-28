@@ -1,0 +1,8 @@
+# Linux deployment files need LF when checked out on Windows.
+*.sh text eol=lf
+.github/workflows/*.yaml text eol=lf
+.github/workflows/*.yml text eol=lf
+deploy/ec2/*.conf text eol=lf
+deploy/ec2/*.example text eol=lf
+deploy/ec2/*.service text eol=lf
+deploy/ec2/*.timer text eol=lf

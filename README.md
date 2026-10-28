@@ -4,6 +4,8 @@ TypeScript/Express/Mongoose REST API for Sunvika. **Phases 1-9 are implemented:*
 
 ## Setup
 
+For GitHub Actions deployment to EC2, use [EC2_DEPLOYMENT.md](EC2_DEPLOYMENT.md). It includes the deployment workflow, Nginx/HTTPS setup, production configuration, automatic queue scheduling, readiness checks and rollback.
+
 For version 0.9.0 production upgrades run `npm run db:indexes:production` and `npm run ops:preflight`, set `RATE_LIMIT_STORE=mongo`, and follow [PHASE9.md](PHASE9.md). It includes monitoring, hardened containers, CI smoke and read-only load commands. Credential delivery now runs automatically with the API; keep commercial/dashboard/cleanup schedules active.
 
 Requires Node 24 LTS, npm and a MongoDB replica set. Authentication writes and audit events use transactions; standalone MongoDB is insufficient.
