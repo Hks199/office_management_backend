@@ -7,6 +7,21 @@ const ref = (name: string): OpenAPIV3.ReferenceObject => ({ $ref: `#/components/
 const object = (properties: Record<string, OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject>, required: string[] = []): OpenAPIV3.SchemaObject => ({ type: 'object', additionalProperties: false, properties, ...(required.length ? { required } : {}) });
 const location = object({ latitude: { type: 'number', minimum: -90, maximum: 90 }, longitude: { type: 'number', minimum: -180, maximum: 180 }, accuracyMeters: { type: 'number', minimum: 0, maximum: 100000 } }, ['latitude', 'longitude']);
 export const attendanceSchemas: Record<string, OpenAPIV3.SchemaObject> = {
+  OfficeAttendanceSettings: object({ _id: { type: 'string', enum: ['office'] }, configured: { type: 'boolean' }, revision,
+    startMinute: { type: 'integer', minimum: 0, maximum: 1439 }, endMinute: { type: 'integer', minimum: 1, maximum: 1439 },
+    graceMinutes: { type: 'integer', minimum: 0, maximum: 120 },
+    workingWeekdays: { type: 'array', items: { type: 'integer', minimum: 1, maximum: 7 } },
+    holidays: { type: 'array', items: { type: 'string', format: 'date' } }, changedBy: id, createdAt: time, updatedAt: time }),
+  OfficeAttendanceSettingsInput: object({ revision, startMinute: { type: 'integer', minimum: 0, maximum: 1439 },
+    endMinute: { type: 'integer', minimum: 1, maximum: 1439, description: 'Must be after startMinute; Asia/Kolkata, no overnight shifts' },
+    graceMinutes: { type: 'integer', minimum: 0, maximum: 120 },
+    workingWeekdays: { type: 'array', minItems: 1, maxItems: 7, uniqueItems: true, items: { type: 'integer', minimum: 1, maximum: 7 } },
+    holidays: { type: 'array', maxItems: 366, uniqueItems: true, items: { type: 'string', format: 'date' } } },
+    ['revision', 'startMinute', 'endMinute', 'graceMinutes', 'workingWeekdays', 'holidays']),
+  AttendanceWorkforce: object({ date: { type: 'string', format: 'date' }, timezone: { type: 'string', enum: ['Asia/Kolkata'] },
+    totalEmployees: { type: 'integer' }, activeEmployees: { type: 'integer' }, onLeave: { type: 'integer' }, inactiveEmployees: { type: 'integer' },
+    notRequired: { type: 'integer' }, present: { type: 'integer' }, absent: { type: 'integer' }, notDue: { type: 'integer' },
+    nonWorkingDay: { type: 'integer' }, notConfigured: { type: 'integer' }, absenceIsProvisional: { type: 'boolean' }, definition: { type: 'string' } }),
   AttendancePolicy: object({ startMinute: { type: 'integer', minimum: 0, maximum: 1439, nullable: true, default: null },
     endMinute: { type: 'integer', minimum: 1, maximum: 1439, nullable: true, default: null }, graceMinutes: { type: 'integer', minimum: 0, maximum: 120, default: 0 },
     maxAccuracyMeters: { type: 'number', minimum: 1, maximum: 10000, default: 100 }, maxCaptureAgeSeconds: { type: 'integer', minimum: 30, maximum: 900, default: 300 },
@@ -63,6 +78,11 @@ export const attendancePaths: OpenAPIV3.PathsObject = {
   '/attendance/me': { get: operation('attendanceMe', 'Attendance', 'Own monthly calendar records within granted scope', undefined, filters, true) },
   '/attendance/me/status': { get: operation('attendanceSelfStatus', 'AttendanceSelfStatus', 'Current self action including open attendance across month boundaries; attendance:create required') },
   '/attendance/summary': { get: operation('attendanceSummary', 'AttendanceSummary', 'Daily counts within one month; no absence/payroll assumptions', undefined, filters) },
+  '/attendance/workforce': { get: operation('attendanceWorkforce', 'AttendanceWorkforce', 'Scoped current workforce; today-only provisional absence after start plus grace; employee/branch/manager/role filters; record date/status filters do not affect workforce', undefined, filters) },
+  '/attendance/settings': {
+    get: operation('officeAttendanceSettingsGet', 'OfficeAttendanceSettings', 'System MD only, no employee panels; settings:manage required'),
+    put: operation('officeAttendanceSettingsSave', 'OfficeAttendanceSettings', 'System MD only; audited revision-checked office schedule and holidays', 'OfficeAttendanceSettingsInput'),
+  },
   '/attendance/employee/{id}': { get: operation('attendanceEmployee', 'Attendance', 'Scoped employee calendar records; path employee overrides query', undefined, [pathId, ...filters], true) },
   '/attendance/branch/{id}': { get: operation('attendanceBranch', 'Attendance', 'Scoped branch history; path branch overrides query', undefined, [pathId, ...filters], true) },
   '/attendance/{id}/review': { patch: operation('attendanceReview', 'Attendance', 'Revision-checked scoped review; self review forbidden', 'AttendanceReview', [pathId]) },

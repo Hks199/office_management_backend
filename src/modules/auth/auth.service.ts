@@ -1,3 +1,4 @@
+import { isManagingDirector } from '../../shared/services/md-access.js';
 import { createHmac, randomUUID } from 'node:crypto';
 import { Types, type ClientSession } from 'mongoose';
 import type { AppConfig } from '../../config/env.js';
@@ -127,6 +128,7 @@ export class AuthService {
     return { id: user._id, employeeCode: user.employeeCode, firstName: user.firstName, lastName: user.lastName,
       email: user.email, mobileNumber: user.mobileNumber, roleId: user.roleId, branchId: user.branchId,
       reportingManagerId: user.reportingManagerId, grants: principal.grants,
+      canManageAttendanceSettings: await isManagingDirector(principal),
       ...(principal.employeePanel ? { employeePanel: { managerName: principal.employeePanel.managerName,
         expiresAt: principal.employeePanel.expiresAt } } : {}) };
   }

@@ -61,6 +61,6 @@ dashboardPaths['/dashboard/exports'] = { post: operation('dashboardExportCreate'
 dashboardPaths['/dashboard/exports/{id}'] = { get: operation('dashboardExportGet', 'Read own unexpired job; private query/principal/fingerprint excluded', 'DashboardExportJob', undefined, [pathId]) };
 dashboardPaths['/dashboard/exports/{id}/download'] = { get: operation('dashboardExportDownload', 'Regenerate same-asOf metrics under current grants; deny stale/revoked data; 60 second version-bound URL', 'PhotoDownload', undefined, [pathId]) };
 dashboardPaths['/dashboard/attendance-calendars/{id}'] = {
-  get: operation('dashboardCalendarGet', 'Visible branch working calendar; unconfigured calendars are explicit', 'DashboardCalendar', undefined, [pathId]),
-  put: operation('dashboardCalendarSet', 'settings:manage ALL + visible branch + dashboard scope; expected revision; Monday=1 through Sunday=7', 'DashboardCalendar', 'DashboardCalendarInput', [pathId]),
+  get: operation('dashboardCalendarGet', 'MD only: branch working calendar; unconfigured calendars are explicit', 'DashboardCalendar', undefined, [pathId]),
+  put: operation('dashboardCalendarSet', 'MD only, no employee panels; settings:manage ALL + visible branch + dashboard scope; expected revision; Monday=1 through Sunday=7', 'DashboardCalendar', 'DashboardCalendarInput', [pathId]),
 };

@@ -10,6 +10,9 @@ import { sendSuccess } from '../../shared/utils/response.js';
 import { pageMeta } from '../../shared/utils/query.js';
 import { evidenceSchema, attendanceQuerySchema, reviewSchema, correctionSchema } from './attendance.validator.js';
 import type { AttendanceEvidence, AttendanceQuery, ReviewInput, CorrectionInput } from './attendance.types.js';
+import { WorkforceService } from './workforce.service.js';
+import { OfficeSettingsService, type OfficeSettingsInput } from './office-settings.service.js';
+import { officeSettingsSchema } from './attendance.validator.js';
 import { AttendanceService } from './attendance.service.js';
 import type { FileService } from '../files/file.service.js';
 export function attendanceRoutes(auth: AuthService, files: FileService): Router {
@@ -33,6 +36,15 @@ export function attendanceRoutes(auth: AuthService, files: FileService): Router 
   });
   router.get('/summary', authorize('attendance:read'), validate({ query: attendanceQuerySchema }), async (_req, res) => {
     sendSuccess(res, await service.summary(principalFrom(res), res.locals.validated?.query as AttendanceQuery));
+  });
+  router.get('/workforce', authorize('attendance:read'), validate({ query: attendanceQuerySchema }), async (_req, res) => {
+    sendSuccess(res, await new WorkforceService().today(principalFrom(res), res.locals.validated?.query as AttendanceQuery));
+  });
+  router.get('/settings', authorize('settings:manage'), async (_req, res) => {
+    sendSuccess(res, await new OfficeSettingsService().get(principalFrom(res)));
+  });
+  router.put('/settings', authorize('settings:manage'), validate({ body: officeSettingsSchema }), async (_req, res) => {
+    sendSuccess(res, await new OfficeSettingsService().save(principalFrom(res), bodyFrom<OfficeSettingsInput>(res), res.locals));
   });
   router.get('/employee/:id', authorize('attendance:read'), validate({ params: idParams, query: attendanceQuerySchema }), list('employee'));
   router.get('/branch/:id', authorize('attendance:read'), validate({ params: idParams, query: attendanceQuerySchema }), list('branch'));

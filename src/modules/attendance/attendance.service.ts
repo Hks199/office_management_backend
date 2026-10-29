@@ -1,4 +1,5 @@
 import { Types, trusted } from 'mongoose';
+import { OfficeSettingsModel } from './office-settings.model.js';
 import { UserModel } from '../users/user.model.js';
 import type { Principal } from '../auth/auth.types.js';
 import { AttendanceModel } from './attendance.model.js';
@@ -58,7 +59,12 @@ export class AttendanceService {
       if (await AttendanceModel.exists({ employeeId: current.userId, attendanceDate }).session(session)) throw new AppError(409, 'DUPLICATE_ATTENDANCE', 'Attendance already exists for this business date');
       const branch = current.branchId ? await BranchModel.findOne({ _id: current.branchId, isActive: true }).session(session).lean() : null;
       if (current.branchId && !branch) throw new AppError(409, 'INVALID_BRANCH', 'Your branch must be active');
-      const policy = normalizePolicy(branch?.attendancePolicy); const id = new Types.ObjectId();
+      const office = await OfficeSettingsModel.findById('office').session(session).lean();
+      const policy = normalizePolicy(branch?.attendancePolicy);
+      if (policy.startMinute === null && office) {
+        policy.startMinute = office.startMinute; policy.endMinute = office.endMinute; policy.graceMinutes = office.graceMinutes;
+      }
+      const id = new Types.ObjectId();
       const fileId = await this.files.attach(input.photoFileId, current, 'ATTENDANCE_CHECK_IN', id, session, now);
       const [record] = await AttendanceModel.create([{ _id: id, employeeId: current.userId, branchId: current.branchId, attendanceDate,
         checkInAt: now, effectiveCheckInAt: now, checkInCapturedAt: capturedAt, checkInPhotoFileId: fileId, checkInLocation: input.location,

@@ -1,3 +1,4 @@
+import { requireManagingDirector } from '../../shared/services/md-access.js';
 import { Types, trusted, type ClientSession } from 'mongoose';
 import type { Principal } from '../auth/auth.types.js';
 import { OrganizationAccess } from '../../shared/services/organization-access.js';
@@ -160,8 +161,10 @@ export class DashboardService {
     return { available: true, rows, total: groups.size, approvedOnly: true, actualPeriod: 'FULL_TARGET_INTERVAL_INTERSECTING_REQUEST' };
   }
   async calendar(actor: Principal, branchId: Types.ObjectId, input?: CalendarInput, context?: AuditContext) {
+    await requireManagingDirector(actor);
     return this.access.transaction(async (session) => {
       const current = await this.access.actor(actor, input ? 'settings:manage' : 'dashboard:read', session);
+      await requireManagingDirector(current, session);
       if (input) this.authorization.requireAll(current, 'settings:manage');
       const query: DashboardQuery = { startDate: businessDate(), endDate: nextDay(businessDate()), compare: false, page: 1, limit: 20, sortBy: 'name', sortOrder: 'asc' };
       const access = new DashboardAccess(current, query, session, false);

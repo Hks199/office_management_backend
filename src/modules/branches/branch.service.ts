@@ -1,3 +1,4 @@
+import { requireManagingDirector } from '../../shared/services/md-access.js';
 import { Types } from 'mongoose';
 import type { Principal } from '../auth/auth.types.js';
 import { AuthorizationService, ScopeService } from '../permissions/authorization.service.js';
@@ -21,6 +22,7 @@ export class BranchService {
   async create(actor: Principal, input: BranchInput, context: AuditContext) {
     return this.access.transaction(async (session) => {
       const current = await this.access.actor(actor, 'branches:create', session); this.authorization.requireAll(current, 'branches:create');
+      if (input.attendancePolicy !== undefined) await requireManagingDirector(current, session);
       await this.locations.assertChain(input, session);
       const branch = await this.repository.create(input, current.userId, session);
       await audit(session, context, 'BRANCH_CREATED', current.userId, 'branch', branch._id, { branchCode: branch.branchCode }); return branch;
@@ -29,6 +31,7 @@ export class BranchService {
   async update(actor: Principal, id: Types.ObjectId, input: BranchUpdate, context: AuditContext) {
     return this.access.transaction(async (session) => {
       const current = await this.access.actor(actor, 'branches:update', session);
+      if (input.attendancePolicy !== undefined) await requireManagingDirector(current, session);
       const previous = await this.repository.get(id, await this.scopes.predicate(current, 'branches:update', this.adapter, session), session);
       if (!previous) throw new AppError(404, 'NOT_FOUND', 'Branch not found');
       if (input.stateId !== undefined || input.districtId !== undefined || input.blockId !== undefined || input.isActive !== undefined || input.attendancePolicy !== undefined) {

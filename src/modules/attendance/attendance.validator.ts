@@ -25,6 +25,17 @@ export const attendanceQuerySchema = Joi.object<AttendanceQuery>({ month: Joi.st
       new Date(value.to).getTime() - new Date(value.from).getTime() > 365 * 86400000)) return helpers.error('any.invalid');
     return value;
   });
+export const officeSettingsSchema = Joi.object({
+  revision: Joi.number().integer().min(0).required(),
+  startMinute: Joi.number().integer().min(0).max(1439).required(),
+  endMinute: Joi.number().integer().min(1).max(1439).greater(Joi.ref('startMinute')).required(),
+  graceMinutes: Joi.number().integer().min(0).max(120).required(),
+  workingWeekdays: Joi.array().items(Joi.number().integer().min(1).max(7)).min(1).max(7).unique().required(),
+  holidays: Joi.array().items(Joi.string().pattern(/^20\d{2}-\d{2}-\d{2}$/).custom((value: string, helpers) => {
+    const day = new Date(value + 'T00:00:00Z');
+    return Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === value ? value : helpers.error('any.invalid');
+  })).max(366).unique().required(),
+}).required();
 const revision = Joi.number().integer().min(0).required(); const reason = Joi.string().trim().min(3).max(500).required();
 export const reviewSchema = Joi.object({ revision, reviewStatus: Joi.string().valid('APPROVED', 'REJECTED', 'PENDING').required(), reason }).required();
 export const correctionSchema = Joi.object({ revision, effectiveCheckInAt: timestamp.required(), effectiveCheckOutAt: timestamp.allow(null).required(), reason }).required();

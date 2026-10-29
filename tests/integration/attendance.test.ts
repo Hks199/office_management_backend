@@ -17,6 +17,7 @@ import { UserModel } from '../../src/modules/users/user.model.js';
 import { RoleModel } from '../../src/modules/roles/role.model.js';
 import { BranchModel } from '../../src/modules/branches/branch.model.js';
 import { StateModel, DistrictModel } from '../../src/modules/locations/location.model.js';
+import { OfficeSettingsModel } from '../../src/modules/attendance/office-settings.model.js';
 import { AttendanceModel } from '../../src/modules/attendance/attendance.model.js';
 import { FileModel } from '../../src/modules/files/file.model.js';
 import { FileService } from '../../src/modules/files/file.service.js';
@@ -106,6 +107,7 @@ beforeAll(async () => {
   await UserModel.updateOne({ _id: direct.id }, { $set: { reportingManagerId: bdo.id } });
 }, 180000);
 beforeEach(async () => {
+  await OfficeSettingsModel.deleteMany({});
   await AttendanceModel.deleteMany({}); await FileModel.deleteMany({}); await LoginAttemptModel.deleteMany({});
   await BranchModel.updateOne({ _id: branchId }, { $set: { attendancePolicy: defaultAttendancePolicy } });
   storage.verify.mockResolvedValue('immutable-version'); storage.remove.mockResolvedValue(undefined); vi.clearAllMocks();
@@ -341,5 +343,36 @@ describe('private upload lifecycle and orphan cleanup', () => {
     }
     await request(app).patch(`/api/v1/branches/${branchId.toHexString()}`).set('Authorization', bearer(rootToken)).send({ revision: branch.revision,
       attendancePolicy: { ...defaultAttendancePolicy, startMinute: 540, endMinute: 1080, graceMinutes: 10 } }).expect(200);
+  });
+});
+
+
+describe('MD office schedule and live workforce counts', () => {
+  const schedule = { revision: 0, startMinute: 0, endMinute: 1439, graceMinutes: 0,
+    workingWeekdays: [1, 2, 3, 4, 5, 6, 7], holidays: [] };
+  it('restricts settings to MD and enforces revisions', async () => {
+    const path = '/api/v1/attendance/settings';
+    await request(app).get(path).expect(401);
+    await request(app).get(path).set('Authorization', bearer(headToken)).expect(403);
+    await request(app).put(path).set('Authorization', bearer(headToken)).send(schedule).expect(403);
+    expect(data<{ configured: boolean }>(await request(app).get(path).set('Authorization', bearer(rootToken)).expect(200)).configured).toBe(false);
+    await request(app).put(path).set('Authorization', bearer(rootToken)).send(schedule).expect(200);
+    await request(app).put(path).set('Authorization', bearer(rootToken)).send(schedule).expect(409);
+    expect(await ActivityLogModel.exists({ action: 'OFFICE_ATTENDANCE_SETTINGS_UPDATED' })).toBeTruthy();
+  });
+  it('counts a scoped employee absent, then present, and applies the saved policy to new check-ins', async () => {
+    await request(app).put('/api/v1/attendance/settings').set('Authorization', bearer(rootToken)).send(schedule).expect(200);
+    const before = data<{ totalEmployees: number; absent: number }>(await request(app).get('/api/v1/attendance/workforce').set('Authorization', bearer()).expect(200));
+    expect(before).toMatchObject({ totalEmployees: 1, absent: 1 });
+    const marked = await checkIn();
+    const record = await AttendanceModel.findById(marked._id).lean();
+    expect(record?.policySnapshot).toMatchObject({ startMinute: 0, endMinute: 1439, graceMinutes: 0 });
+    const after = data<{ present: number; absent: number }>(await request(app).get('/api/v1/attendance/workforce').set('Authorization', bearer()).expect(200));
+    expect(after).toMatchObject({ present: 1, absent: 0 });
+  });
+  it('excludes office holidays from absence for branch employees', async () => {
+    await request(app).put('/api/v1/attendance/settings').set('Authorization', bearer(rootToken)).send({ ...schedule, holidays: [businessDate()] }).expect(200);
+    const count = data<{ absent: number; nonWorkingDay: number }>(await request(app).get('/api/v1/attendance/workforce').set('Authorization', bearer()).expect(200));
+    expect(count).toMatchObject({ absent: 0, nonWorkingDay: 1 });
   });
 });
