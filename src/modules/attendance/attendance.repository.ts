@@ -6,7 +6,8 @@ export class AttendanceRepository {
   filter(scope: ScopePredicate, query: AttendanceQuery): ScopePredicate {
     const monthEnd = new Date(`${query.month}-01T00:00:00Z`); monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1);
     // Aggregations do not apply Mongoose sanitization; all values here are validated scalar DTOs.
-    return { $and: [scope, { attendanceDate: { $gte: `${query.month}-01`, $lt: monthEnd.toISOString().slice(0, 10) },
+    return { $and: [scope, { attendanceDate: query.from && query.to ? { $gte: query.from, $lte: query.to } : { $gte: `${query.month}-01`, $lt: monthEnd.toISOString().slice(0, 10) },
+      ...(query.outsideGeofence === undefined ? {} : { evidenceFlags: query.outsideGeofence ? 'OUTSIDE_GEOFENCE' : { $ne: 'OUTSIDE_GEOFENCE' } }),
       ...(query.employeeId ? { employeeId: new Types.ObjectId(query.employeeId) } : {}),
       ...(query.branchId ? { branchId: new Types.ObjectId(query.branchId) } : {}),
       ...(query.status ? { status: query.status } : {}), ...(query.reviewStatus ? { reviewStatus: query.reviewStatus } : {}),

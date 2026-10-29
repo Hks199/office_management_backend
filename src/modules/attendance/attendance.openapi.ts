@@ -44,6 +44,8 @@ const response = (name: string, list = false, status = '200'): OpenAPIV3.Respons
 const pathId: OpenAPIV3.ParameterObject = { in: 'path', name: 'id', required: true, schema: id };
 const filter = (name: string, schema: OpenAPIV3.SchemaObject): OpenAPIV3.ParameterObject => ({ in: 'query', name, schema });
 const filters = [filter('month', { type: 'string', pattern: '^20[0-9]{2}-(0[1-9]|1[0-2])$', description: 'Defaults to the current Kolkata month' }),
+  filter('from', { type: 'string', format: 'date', description: 'Inclusive Kolkata business date; supply with to. Overrides month; maximum 366 dates.' }),
+  filter('to', { type: 'string', format: 'date' }), filter('managerId', id), filter('roleId', id), filter('outsideGeofence', { type: 'boolean' }),
   filter('employeeId', id), filter('branchId', id), filter('status', { type: 'string', enum: ['OPEN', 'COMPLETED'] }), filter('reviewStatus', { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED'] }),
   filter('lateArrival', { type: 'boolean' }), filter('earlyExit', { type: 'boolean' }), filter('page', { type: 'integer', minimum: 1, maximum: 10000, default: 1 }),
   filter('limit', { type: 'integer', minimum: 1, maximum: 100, default: 20 }), filter('sortOrder', { type: 'string', enum: ['asc', 'desc'], default: 'desc' })];

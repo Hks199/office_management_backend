@@ -1,4 +1,5 @@
-import { Types } from 'mongoose';
+import { Types, trusted } from 'mongoose';
+import { UserModel } from '../users/user.model.js';
 import type { Principal } from '../auth/auth.types.js';
 import { AttendanceModel } from './attendance.model.js';
 import { AttendanceRepository } from './attendance.repository.js';
@@ -66,13 +67,26 @@ export class AttendanceService {
       await audit(session, context, 'ATTENDANCE_MARKED', current.userId, 'attendance', id, { operation: 'CHECK_IN', attendanceDate }); return record.toObject();
     });
   }
+  private async filteredScope(actor: Principal, query: AttendanceQuery) {
+    let scope = await this.scopes.predicate(actor, 'attendance:read', this.adapter);
+    // User-selected filters only narrow the existing attendance permission scope.
+    if (query.managerId) {
+      const descendants = await this.scopes.descendants(new Types.ObjectId(query.managerId), false);
+      scope = this.scopes.combine(scope, { employeeId: trusted({ $in: descendants }) });
+    }
+    if (query.roleId) {
+      const ids = await UserModel.distinct('_id', { roleId: new Types.ObjectId(query.roleId) }).maxTimeMS(5000);
+      scope = this.scopes.combine(scope, { employeeId: trusted({ $in: ids }) });
+    }
+    return scope;
+  }
   async list(actor: Principal, query: AttendanceQuery, self = false) {
-    const scope = await this.scopes.predicate(actor, 'attendance:read', this.adapter);
+    const scope = await this.filteredScope(actor, query);
     return this.repository.list(self ? this.scopes.combine(scope, { employeeId: actor.userId }) : scope, query);
   }
   async summary(actor: Principal, query: AttendanceQuery) {
-    const days = await this.repository.summary(await this.scopes.predicate(actor, 'attendance:read', this.adapter), query);
-    return { month: query.month, timezone: 'Asia/Kolkata', days };
+    const days = await this.repository.summary(await this.filteredScope(actor, query), query);
+    return { month: query.month, ...(query.from ? { from: query.from, to: query.to } : {}), timezone: 'Asia/Kolkata', days };
   }
   async review(actor: Principal, id: Types.ObjectId, input: ReviewInput, context: AuditContext) {
     return this.access.transaction(async (session) => {
