@@ -45,6 +45,10 @@ services:
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Encryption key required}
       AWS_REGION: ${AWS_REGION:?Private storage region required}
       S3_BUCKET: ${S3_BUCKET:?Private storage bucket required}
+      # Optional with an EC2 instance role; host .env values are not inherited automatically.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
     ports: ["127.0.0.1:3000:3000"]
     stop_grace_period: 20s
     restart: unless-stopped

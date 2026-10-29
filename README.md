@@ -81,7 +81,7 @@ Run `npm run db:indexes:organization` when upgrading Phase 2 data. No locations 
 
 ## Phase 4 attendance and private photos
 
-See [PHASE4.md](PHASE4.md) for the complete upload/check-in/review workflow and defaults. Configure AWS_REGION and S3_BUCKET together with a private, encrypted, versioned S3 bucket and workload IAM role; use the reviewable [bucket template](infra/private-photos.yaml). Run `npm run db:indexes:attendance` before rollout and schedule `npm run cleanup:orphan-photos` with separate cleanup credentials. Photo storage is optional for unrelated APIs, but required for attendance submissions. Live S3/IAM/CORS validation remains a deployment step. Phase 5 is documented in PHASE5.md.
+See [PHASE4.md](PHASE4.md) for the complete upload/check-in/review workflow and defaults. For hosted credential errors see [S3 deployment recovery](deploy/ec2/AWS_STORAGE_RECOVERY.md). Configure AWS_REGION and S3_BUCKET together with a private, encrypted, versioned S3 bucket and workload IAM role; use the reviewable [bucket template](infra/private-photos.yaml). Run `npm run db:indexes:attendance` before rollout and schedule `npm run cleanup:orphan-photos` with separate cleanup credentials. Photo storage is optional for unrelated APIs, but required for attendance submissions. Live S3/IAM/CORS validation remains a deployment step. Phase 5 is documented in PHASE5.md.
 
 ## Phase 5 customers, CSV and leads
 

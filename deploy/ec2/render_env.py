@@ -35,7 +35,9 @@ DEFAULTS = {
     "SMTP_PASSWORD": "",
     "MAIL_FROM": ""
 }
-KEYS = (*REQUIRED, *DEFAULTS)
+# Optional: an EC2 workload role can supply credentials instead of static keys.
+SECRET_KEYS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
+KEYS = (*REQUIRED, *DEFAULTS, *SECRET_KEYS)
 
 
 def configuration(environment):
@@ -49,6 +51,12 @@ def configuration(environment):
     for key, value in settings.items():
         if any(character in value for character in ("\r", "\n", "\0")):
             raise ValueError("Setting must be a single line: " + key)
+    if bool(settings["AWS_ACCESS_KEY_ID"]) != bool(settings["AWS_SECRET_ACCESS_KEY"]):
+        raise ValueError("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be configured together")
+    if settings["AWS_SESSION_TOKEN"] and not settings["AWS_ACCESS_KEY_ID"]:
+        raise ValueError("AWS_SESSION_TOKEN requires AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY")
+    if settings["AWS_ACCESS_KEY_ID"].startswith("ASIA") and not settings["AWS_SESSION_TOKEN"]:
+        raise ValueError("Temporary AWS credentials require AWS_SESSION_TOKEN")
     if not 48 <= len(settings["JWT_SECRET"]) <= 512:
         raise ValueError("JWT_SECRET must contain 48 to 512 characters")
     if not re.fullmatch(r"[0-9a-fA-F]{64}", settings["TOKEN_ENCRYPTION_KEY"]):

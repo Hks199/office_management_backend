@@ -112,8 +112,50 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_workflow_maps_every_supported_key_explicitly(self):
         workflow = (ROOT / ".github/workflows/deploy.yaml").read_text(encoding="utf-8")
-        for key in (*render_env.KEYS, "MIGRATION_MONGODB_URI"):
+        for key in (*render_env.REQUIRED, *render_env.DEFAULTS, "MIGRATION_MONGODB_URI"):
             self.assertIn(key + ": ${{ secrets." + key + " || vars." + key + " }}", workflow)
+
+    def test_credentials_use_secrets_only_and_reach_container(self):
+        workflow = (ROOT / ".github/workflows/deploy.yaml").read_text(encoding="utf-8")
+        compose = (ROOT / "docker-compose.production.yml").read_text(encoding="utf-8")
+        for key in render_env.SECRET_KEYS:
+            self.assertIn(key + ": ${{ secrets." + key + " }}", workflow)
+            self.assertNotIn("vars." + key, workflow)
+            self.assertIn(key + ": ${" + key + ":-}", compose)
+
+    def test_role_credentials_remain_optional(self):
+        values = render_env.configuration(fixture())
+        for key in render_env.SECRET_KEYS:
+            self.assertEqual(values[key], "")
+
+    def test_credentials_survive_private_render_and_migration(self):
+        environment = fixture()
+        environment.update(AWS_ACCESS_KEY_ID="ASIASYNTHETIC", AWS_SECRET_ACCESS_KEY="synthetic-secret",
+                           AWS_SESSION_TOKEN="synthetic-token+/$=", RUN_INDEX_MIGRATION="true")
+        with tempfile.TemporaryDirectory() as temp:
+            render_env.render(environment, temp)
+            for name in ("backend.env", "migrate.env"):
+                content = Path(temp, name).read_text(encoding="utf-8")
+                for key in render_env.SECRET_KEYS:
+                    expected = json.dumps(environment[key].replace("$", "$$"))
+                    self.assertIn(key + "=" + expected + "\n", content)
+
+    def test_incomplete_credentials_fail_without_disclosing_values(self):
+        cases = [
+            ({"AWS_ACCESS_KEY_ID": "synthetic-private-id"}, "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be configured together"),
+            ({"AWS_SECRET_ACCESS_KEY": "synthetic-private-secret"}, "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be configured together"),
+            ({"AWS_SESSION_TOKEN": "synthetic-private-token"}, "AWS_SESSION_TOKEN requires AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"),
+            ({"AWS_ACCESS_KEY_ID": "ASIASYNTHETIC", "AWS_SECRET_ACCESS_KEY": "synthetic-private-secret"}, "Temporary AWS credentials require AWS_SESSION_TOKEN"),
+            ({"AWS_ACCESS_KEY_ID": "synthetic-id", "AWS_SECRET_ACCESS_KEY": "private\nINJECTED=value"}, "Setting must be a single line: AWS_SECRET_ACCESS_KEY"),
+        ]
+        for extra, expected in cases:
+            with self.subTest(keys=list(extra)), tempfile.TemporaryDirectory() as temp:
+                environment = fixture()
+                environment.update(extra)
+                with self.assertRaises(ValueError) as error:
+                    render_env.render(environment, temp)
+                self.assertEqual(str(error.exception), expected)
+                self.assertEqual(list(Path(temp).iterdir()), [])
 
     @unittest.skipUnless(shutil.which("docker"), "Docker Compose CLI is unavailable")
     def test_special_characters_round_trip_through_real_compose(self):
@@ -121,6 +163,8 @@ class EnvironmentTests(unittest.TestCase):
         special = "literal$NAME${NAME}$$ # 'quote' \"double\" \\tab\tbackslash\\"
         environment["JWT_SECRET"] = special
         environment["SMTP_PASSWORD"] = " password $with#quotes'\" and\\slashes\\ "
+        environment.update(AWS_ACCESS_KEY_ID="ASIASYNTHETIC", AWS_SECRET_ACCESS_KEY="synthetic-secret+/$=",
+                           AWS_SESSION_TOKEN="synthetic-token+/$=")
         with tempfile.TemporaryDirectory() as temp:
             render_env.render(environment, temp)
             command = [
@@ -142,6 +186,8 @@ class EnvironmentTests(unittest.TestCase):
             # Compose escapes dollars in serialized config so it can be read again.
             self.assertEqual(container_env["JWT_SECRET"].replace("$$", "$"), special)
             self.assertEqual(container_env["SMTP_PASSWORD"].replace("$$", "$"), environment["SMTP_PASSWORD"])
+            for key in render_env.SECRET_KEYS:
+                self.assertEqual(container_env[key].replace("$$", "$"), environment[key], key)
 
 
 if __name__ == "__main__":
